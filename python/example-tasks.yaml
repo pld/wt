@@ -1,0 +1,18 @@
+base_branch: main
+worktree_dir: ../wt-trees
+
+tasks:
+  - id: feat-auth
+    prompt: "Implement OAuth2 authentication"
+    agent: claude-code
+
+  - id: feat-payments
+    prompt: "Add Stripe integration"
+    agent: claude-code
+
+  - id: refactor-api
+    prompt: "Extract API client to separate module"
+    agent: aider --yes
+
+merge_strategy: squash
+cleanup: auto
