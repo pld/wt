@@ -110,7 +110,6 @@ wt use [name]             Enter existing workspace
 wt ls                     Interactive workspace picker
 wt rm [name]              Remove workspace (interactive if no name)
 wt which                  Print current workspace name
-wt run <config>           Batch orchestration from YAML
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
 ```
 
@@ -121,32 +120,6 @@ Inside a workspace shell:
 - `WT_BRANCH` - Git branch
 - `WT_PATH` - Full path to workspace
 - `WT_ACTIVE` - Set to "1"
-
-## Batch Mode
-
-For automated orchestration:
-
-```yaml
-# tasks.yaml
-base_branch: main
-
-tasks:
-  - id: feature/auth
-    prompt: "Implement OAuth2"
-    agent: claude-code
-
-  - id: feature/payments
-    prompt: "Add Stripe"
-    agent: claude-code
-
-merge_strategy: squash
-cleanup: auto
-```
-
-```bash
-wt run tasks.yaml
-wt run tasks.yaml --dry-run
-```
 
 ## How It Works
 

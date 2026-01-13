@@ -56,14 +56,6 @@ enum Commands {
         /// Name of the workspace to remove (interactive if omitted)
         name: Option<String>,
     },
-    /// Run batch orchestration from config file
-    Run {
-        /// Path to tasks.yaml configuration
-        config: PathBuf,
-        /// Show what would be done without executing
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Print current worktree name (or "main" if in main worktree)
     Which,
 }
@@ -133,7 +125,6 @@ fn main() -> Result<()> {
         Commands::Use { name } => cmd_use(&config, name),
         Commands::Ls => cmd_ls(&config),
         Commands::Rm { name } => cmd_rm(&config, name),
-        Commands::Run { config: cfg, dry_run } => wt::run::execute(&cfg, dry_run),
         Commands::Which => cmd_which(&config.root),
     }
 }
