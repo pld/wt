@@ -4,6 +4,7 @@ use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use wt::shell::spawn_wt_shell;
 use wt::worktree_manager::{
     check_not_in_worktree, ensure_worktrees_in_gitignore, get_current_worktree_name,
     WorktreeManager,
@@ -52,8 +53,8 @@ enum Commands {
     Ls,
     /// Remove a workspace
     Rm {
-        /// Name of the workspace to remove
-        name: String,
+        /// Name of the workspace to remove (interactive if omitted)
+        name: Option<String>,
     },
     /// Run batch orchestration from config file
     Run {
@@ -131,7 +132,7 @@ fn main() -> Result<()> {
         Commands::New { name, b } => cmd_new(&config, name, &b),
         Commands::Use { name } => cmd_use(&config, name),
         Commands::Ls => cmd_ls(&config),
-        Commands::Rm { name } => cmd_rm(&config, &name),
+        Commands::Rm { name } => cmd_rm(&config, name),
         Commands::Run { config: cfg, dry_run } => wt::run::execute(&cfg, dry_run),
         Commands::Which => cmd_which(&config.root),
     }
@@ -140,30 +141,112 @@ fn main() -> Result<()> {
 fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str) -> Result<()> {
     check_not_in_worktree(&config.root)?;
 
+    let current_branch = get_current_branch()?;
+    let root_branch = get_root_branch();
+
     let name = match name {
         Some(n) => n,
         None => {
-            let current = get_current_branch()?;
-            let root_branch = get_root_branch();
-            if current == root_branch {
+            if current_branch == root_branch {
                 anyhow::bail!(
                     "On root branch '{}'. Specify a name: wt new <name>",
                     root_branch
                 );
             }
-            current
+            current_branch.clone()
         }
+    };
+
+    // If creating worktree for currently checked out branch, migrate the work
+    let migrating = name == current_branch && current_branch != root_branch;
+    let had_changes = if migrating {
+        migrate_from_current_branch(&config.root, &root_branch)?
+    } else {
+        false
     };
 
     let manager = WorktreeManager::new(config.root.clone())?;
     ensure_worktrees_in_gitignore(&config.root, &config.worktree_dir)?;
     std::fs::create_dir_all(&config.worktree_dir)?;
     let path = manager.create_worktree(&name, base, &config.worktree_dir)?;
+
+    // Pop stash in the new worktree if we migrated changes
+    if had_changes {
+        let output = Command::new("git")
+            .args(["stash", "pop"])
+            .current_dir(&path)
+            .output()
+            .context("Failed to pop stash")?;
+        if !output.status.success() {
+            eprintln!(
+                "Warning: Failed to restore changes: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     spawn_wt_shell(&path, &name, &name)?;
     Ok(())
 }
 
-fn cmd_ls(config: &RepoConfig) -> Result<()> {
+fn migrate_from_current_branch(repo_path: &Path, root_branch: &str) -> Result<bool> {
+    // Check for uncommitted changes
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to check git status")?;
+
+    let has_changes = !status.stdout.is_empty();
+
+    if has_changes {
+        eprintln!("Stashing uncommitted changes...");
+        let stash = Command::new("git")
+            .args(["stash", "push", "-m", "wt: migrating to worktree"])
+            .current_dir(repo_path)
+            .output()
+            .context("Failed to stash changes")?;
+        if !stash.status.success() {
+            anyhow::bail!(
+                "Failed to stash changes: {}",
+                String::from_utf8_lossy(&stash.stderr)
+            );
+        }
+    }
+
+    eprintln!("Switching to {}...", root_branch);
+    let checkout = Command::new("git")
+        .args(["checkout", root_branch])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to switch branches")?;
+
+    if !checkout.status.success() {
+        // Try to restore stash if checkout failed
+        if has_changes {
+            let _ = Command::new("git")
+                .args(["stash", "pop"])
+                .current_dir(repo_path)
+                .output();
+        }
+        anyhow::bail!(
+            "Failed to switch to {}: {}",
+            root_branch,
+            String::from_utf8_lossy(&checkout.stderr)
+        );
+    }
+
+    Ok(has_changes)
+}
+
+enum PickResult {
+    Selected(String),
+    ExitShell,
+    Cancelled,
+    Empty,
+}
+
+fn pick_worktree(config: &RepoConfig, prompt: &str) -> Result<PickResult> {
     let manager = WorktreeManager::new(config.root.clone())?;
     let worktrees = manager.list_worktrees()?;
 
@@ -176,8 +259,7 @@ fn cmd_ls(config: &RepoConfig) -> Result<()> {
         .collect();
 
     if wt_list.is_empty() {
-        eprintln!("No worktrees found.");
-        return Ok(());
+        return Ok(PickResult::Empty);
     }
 
     // Non-interactive mode if not a TTY
@@ -190,7 +272,7 @@ fn cmd_ls(config: &RepoConfig) -> Result<()> {
             };
             println!("{}{}", wt.task_id, marker);
         }
-        return Ok(());
+        return Ok(PickResult::Cancelled);
     }
 
     let mut items: Vec<String> = wt_list
@@ -221,6 +303,7 @@ fn cmd_ls(config: &RepoConfig) -> Result<()> {
         0
     };
 
+    eprintln!("{}", prompt);
     let selection = Select::new()
         .items(&items)
         .default(default)
@@ -229,25 +312,52 @@ fn cmd_ls(config: &RepoConfig) -> Result<()> {
     let selected = &items[selection];
 
     if selected == "← exit shell" {
-        eprintln!("Type 'exit' to leave this worktree shell.");
-        return Ok(());
+        return Ok(PickResult::ExitShell);
     }
 
     if selected == "← cancel" {
-        return Ok(());
+        return Ok(PickResult::Cancelled);
     }
 
-    let wt_name = selected.trim_end_matches(" *");
-    let wt_info = wt_list.iter().find(|w| w.task_id == wt_name).unwrap();
+    let wt_name = selected.trim_end_matches(" *").to_string();
+    Ok(PickResult::Selected(wt_name))
+}
 
-    spawn_wt_shell(&wt_info.path, &wt_info.task_id, &wt_info.branch)?;
-
+fn cmd_ls(config: &RepoConfig) -> Result<()> {
+    match pick_worktree(config, "Select worktree:")? {
+        PickResult::Empty => {
+            eprintln!("No worktrees found.");
+        }
+        PickResult::ExitShell => {
+            eprintln!("Type 'exit' to leave this worktree shell.");
+        }
+        PickResult::Cancelled => {}
+        PickResult::Selected(name) => {
+            let manager = WorktreeManager::new(config.root.clone())?;
+            let wt_info = manager.get_worktree_info(&name)?
+                .ok_or_else(|| anyhow::anyhow!("Worktree not found"))?;
+            spawn_wt_shell(&wt_info.path, &wt_info.task_id, &wt_info.branch)?;
+        }
+    }
     Ok(())
 }
 
-fn cmd_rm(config: &RepoConfig, name: &str) -> Result<()> {
+fn cmd_rm(config: &RepoConfig, name: Option<String>) -> Result<()> {
+    let name = match name {
+        Some(n) => n,
+        None => match pick_worktree(config, "Remove worktree:")? {
+            PickResult::Selected(n) => n,
+            PickResult::Empty => {
+                eprintln!("No worktrees found.");
+                return Ok(());
+            }
+            _ => return Ok(()),
+        },
+    };
+
     let manager = WorktreeManager::new(config.root.clone())?;
-    manager.remove_worktree(name, &config.worktree_dir)?;
+    manager.remove_worktree(&name)?;
+    eprintln!("Removed worktree: {}", name);
     Ok(())
 }
 
@@ -281,125 +391,3 @@ fn cmd_use(config: &RepoConfig, name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn spawn_wt_shell(wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
-    if std::env::var("WT_ACTIVE").is_ok() {
-        anyhow::bail!("Already in a wt shell. Use 'wt ls' to switch or 'exit' first.");
-    }
-
-    let shell_path = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-    let shell_name = Path::new(&shell_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("bash");
-
-    eprintln!("Entering worktree: {}", wt_name);
-
-    match shell_name {
-        "bash" => {
-            let rcfile_content = format!(
-                "[ -f ~/.bashrc ] && source ~/.bashrc; PS1=\"(wt: {}) $PS1\"",
-                wt_name
-            );
-            let temp_rc = std::env::temp_dir().join(format!("wt-bashrc-{}", std::process::id()));
-            std::fs::write(&temp_rc, rcfile_content)?;
-
-            let result = Command::new(&shell_path)
-                .arg("--rcfile")
-                .arg(&temp_rc)
-                .current_dir(wt_path)
-                .env("WT_NAME", wt_name)
-                .env("WT_BRANCH", branch)
-                .env("WT_PATH", wt_path.display().to_string())
-                .env("WT_ACTIVE", "1")
-                .status()?;
-
-            let _ = std::fs::remove_file(&temp_rc);
-            result
-        }
-        "zsh" => {
-            let temp_dir = create_zsh_wrapper(wt_name)?;
-            let result = Command::new(&shell_path)
-                .current_dir(wt_path)
-                .env("ZDOTDIR", &temp_dir)
-                .env("WT_NAME", wt_name)
-                .env("WT_BRANCH", branch)
-                .env("WT_PATH", wt_path.display().to_string())
-                .env("WT_ACTIVE", "1")
-                .env(
-                    "_WT_ORIG_ZDOTDIR",
-                    std::env::var("ZDOTDIR").unwrap_or_else(|_| std::env::var("HOME").unwrap_or_default()),
-                )
-                .status()?;
-
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            result
-        }
-        "fish" => {
-            Command::new(&shell_path)
-                .arg("--init-command")
-                .arg(format!(
-                    "functions -c fish_prompt _wt_orig_prompt 2>/dev/null; \
-                     function fish_prompt; echo -n '(wt: {}) '; _wt_orig_prompt; end",
-                    wt_name
-                ))
-                .current_dir(wt_path)
-                .env("WT_NAME", wt_name)
-                .env("WT_BRANCH", branch)
-                .env("WT_PATH", wt_path.display().to_string())
-                .env("WT_ACTIVE", "1")
-                .status()?
-        }
-        _ => {
-            Command::new(&shell_path)
-                .current_dir(wt_path)
-                .env("WT_NAME", wt_name)
-                .env("WT_BRANCH", branch)
-                .env("WT_PATH", wt_path.display().to_string())
-                .env("WT_ACTIVE", "1")
-                .status()?
-        }
-    };
-
-    show_exit_status(wt_path)?;
-    Ok(())
-}
-
-fn create_zsh_wrapper(wt_name: &str) -> Result<PathBuf> {
-    let temp_dir = std::env::temp_dir().join(format!("wt-zsh-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir)?;
-
-    let zshrc_content = format!(
-        r#"# Source user's zshrc
-if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
-    source "$_WT_ORIG_ZDOTDIR/.zshrc"
-elif [[ -f "$HOME/.zshrc" ]]; then
-    source "$HOME/.zshrc"
-fi
-# Add wt indicator to prompt
-PROMPT="(wt: {}) $PROMPT"
-"#,
-        wt_name
-    );
-
-    std::fs::write(temp_dir.join(".zshrc"), zshrc_content)?;
-    Ok(temp_dir)
-}
-
-fn show_exit_status(wt_path: &Path) -> Result<()> {
-    eprintln!("\n--- Exiting wt shell ---");
-
-    let output = Command::new("git")
-        .args(["status", "--short"])
-        .current_dir(wt_path)
-        .output()?;
-
-    let status = String::from_utf8_lossy(&output.stdout);
-    if status.is_empty() {
-        eprintln!("Working tree clean.");
-    } else {
-        eprintln!("Uncommitted changes:");
-        eprint!("{}", status);
-    }
-
-    Ok(())
-}

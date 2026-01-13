@@ -5,3 +5,4 @@ pub mod merge_coordinator;
 pub mod cleanup;
 pub mod ui;
 pub mod run;
+pub mod shell;

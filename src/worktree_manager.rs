@@ -4,6 +4,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn sanitize_for_path(name: &str) -> String {
+    name.replace('/', "--")
+}
+
+fn unsanitize_from_path(name: &str) -> String {
+    name.replace("--", "/")
+}
+
 pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> Result<()> {
     let gitignore_path = repo_path.join(".gitignore");
 
@@ -92,7 +100,9 @@ impl WorktreeManager {
         base_branch: &str,
         worktree_dir: &Path,
     ) -> Result<PathBuf> {
-        let worktree_path = worktree_dir.join(task_id);
+        // Sanitize for filesystem (/ -> --) but keep original for git
+        let safe_name = sanitize_for_path(task_id);
+        let worktree_path = worktree_dir.join(&safe_name);
 
         if worktree_path.exists() {
             anyhow::bail!("Worktree path already exists: {:?}", worktree_path);
@@ -184,10 +194,11 @@ impl WorktreeManager {
         let task_id = if path == self.repo_path {
             String::new()
         } else {
-            path.file_name()
+            let dir_name = path.file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string()
+                .unwrap_or("");
+            // Convert filesystem name back to original (-- -> /)
+            unsanitize_from_path(dir_name)
         };
 
         WorktreeInfo {
@@ -197,24 +208,32 @@ impl WorktreeManager {
         }
     }
 
-    pub fn remove_worktree(&self, task_id: &str, worktree_dir: &Path) -> Result<()> {
-        let worktree_path = worktree_dir.join(task_id);
+    pub fn remove_worktree(&self, task_id: &str) -> Result<()> {
+        // Look up the actual path from git
+        let wt_info = self.get_worktree_info(task_id)?
+            .ok_or_else(|| anyhow::anyhow!("Worktree '{}' not found", task_id))?;
 
-        if !worktree_path.exists() {
-            anyhow::bail!("Worktree does not exist: {:?}", worktree_path);
+        // If path doesn't exist on disk, just prune stale entries
+        if !wt_info.path.exists() {
+            Command::new("git")
+                .args(["worktree", "prune"])
+                .current_dir(&self.repo_path)
+                .output()
+                .context("Failed to prune stale worktrees")?;
+            return Ok(());
         }
 
         let output = Command::new("git")
-            .args(&["worktree", "remove"])
-            .arg(&worktree_path)
+            .args(["worktree", "remove"])
+            .arg(&wt_info.path)
             .current_dir(&self.repo_path)
             .output()
             .context("Failed to execute git worktree remove")?;
 
         if !output.status.success() {
             let output_force = Command::new("git")
-                .args(&["worktree", "remove", "--force"])
-                .arg(&worktree_path)
+                .args(["worktree", "remove", "--force"])
+                .arg(&wt_info.path)
                 .current_dir(&self.repo_path)
                 .output()
                 .context("Failed to execute git worktree remove --force")?;
@@ -230,8 +249,10 @@ impl WorktreeManager {
         Ok(())
     }
 
-    pub fn worktree_exists(&self, task_id: &str, worktree_dir: &Path) -> bool {
-        worktree_dir.join(task_id).exists()
+    pub fn worktree_exists(&self, task_id: &str) -> bool {
+        self.get_worktree_info(task_id)
+            .map(|info| info.is_some())
+            .unwrap_or(false)
     }
 
     pub fn get_worktree_info(&self, task_id: &str) -> Result<Option<WorktreeInfo>> {
@@ -336,9 +357,7 @@ mod tests {
 
         assert!(worktree_path.exists());
 
-        manager
-            .remove_worktree("test-feature", worktree_dir.path())
-            .unwrap();
+        manager.remove_worktree("test-feature").unwrap();
 
         assert!(!worktree_path.exists());
     }
@@ -350,13 +369,13 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
 
-        assert!(!manager.worktree_exists("test-feature", worktree_dir.path()));
+        assert!(!manager.worktree_exists("test-feature"));
 
         manager
             .create_worktree("test-feature", "main", worktree_dir.path())
             .unwrap();
 
-        assert!(manager.worktree_exists("test-feature", worktree_dir.path()));
+        assert!(manager.worktree_exists("test-feature"));
     }
 
     #[test]
@@ -394,10 +413,9 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_worktree() {
         let repo = setup_git_repo();
-        let worktree_dir = TempDir::new().unwrap();
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
-        let result = manager.remove_worktree("nonexistent", worktree_dir.path());
+        let result = manager.remove_worktree("nonexistent");
         assert!(result.is_err());
     }
 
@@ -439,5 +457,36 @@ mod tests {
             .unwrap();
         let branch = String::from_utf8_lossy(&output.stdout);
         assert_eq!(branch.trim(), "existing-feature");
+    }
+
+    #[test]
+    fn test_branch_name_with_slashes() {
+        let repo = setup_git_repo();
+        let worktree_dir = TempDir::new().unwrap();
+
+        let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
+
+        // Create worktree with slash in name
+        let worktree_path = manager
+            .create_worktree("feature/auth", "main", worktree_dir.path())
+            .unwrap();
+
+        // Directory should use sanitized name (-- instead of /)
+        assert!(worktree_path.exists());
+        assert!(worktree_path.ends_with("feature--auth"));
+
+        // Listing should return original name with slashes
+        let worktrees = manager.list_worktrees().unwrap();
+        let wt = worktrees.iter().find(|w| w.task_id == "feature/auth");
+        assert!(wt.is_some(), "Should find worktree by original name");
+
+        // get_worktree_info should work with original name
+        let info = manager.get_worktree_info("feature/auth").unwrap();
+        assert!(info.is_some());
+        assert_eq!(info.unwrap().task_id, "feature/auth");
+
+        // Remove should work with original name
+        manager.remove_worktree("feature/auth").unwrap();
+        assert!(!worktree_path.exists());
     }
 }

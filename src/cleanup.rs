@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::path::Path;
 use crate::worktree_manager::WorktreeManager;
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +31,6 @@ impl<'a> CleanupOrchestrator<'a> {
     pub fn cleanup_worktree(
         &self,
         task_id: &str,
-        worktree_dir: &Path,
         mode: CleanupMode,
         task_failed: bool,
     ) -> Result<()> {
@@ -40,8 +38,8 @@ impl<'a> CleanupOrchestrator<'a> {
             CleanupMode::Manual => Ok(()),
             CleanupMode::KeepOnError if task_failed => Ok(()),
             _ => {
-                if self.worktree_manager.worktree_exists(task_id, worktree_dir) {
-                    self.worktree_manager.remove_worktree(task_id, worktree_dir)?;
+                if self.worktree_manager.get_worktree_info(task_id)?.is_some() {
+                    self.worktree_manager.remove_worktree(task_id)?;
                 }
                 Ok(())
             }

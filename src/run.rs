@@ -120,7 +120,6 @@ pub fn execute(config_path: &PathBuf, dry_run: bool) -> Result<()> {
 
         if let Err(e) = cleanup_orchestrator.cleanup_worktree(
             &task.id,
-            &config.worktree_dir,
             cleanup_mode,
             task_failed,
         ) {
