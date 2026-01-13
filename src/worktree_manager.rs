@@ -4,9 +4,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn ensure_worktrees_in_gitignore(repo_path: &Path) -> Result<()> {
+pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> Result<()> {
     let gitignore_path = repo_path.join(".gitignore");
-    let pattern = ".worktrees";
+
+    // Get the directory name relative to repo root for gitignore
+    let pattern = worktree_dir
+        .strip_prefix(repo_path)
+        .ok()
+        .and_then(|p| p.to_str())
+        .unwrap_or(".worktrees");
 
     if gitignore_path.exists() {
         let content = fs::read_to_string(&gitignore_path)
@@ -92,13 +98,25 @@ impl WorktreeManager {
             anyhow::bail!("Worktree path already exists: {:?}", worktree_path);
         }
 
-        let output = Command::new("git")
-            .args(&["worktree", "add", "-b", task_id])
-            .arg(&worktree_path)
-            .arg(base_branch)
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git worktree add")?;
+        let output = if self.branch_exists(task_id) {
+            // Branch exists, just check it out
+            Command::new("git")
+                .args(["worktree", "add"])
+                .arg(&worktree_path)
+                .arg(task_id)
+                .current_dir(&self.repo_path)
+                .output()
+                .context("Failed to execute git worktree add")?
+        } else {
+            // Create new branch from base
+            Command::new("git")
+                .args(["worktree", "add", "-b", task_id])
+                .arg(&worktree_path)
+                .arg(base_branch)
+                .current_dir(&self.repo_path)
+                .output()
+                .context("Failed to execute git worktree add")?
+        };
 
         if !output.status.success() {
             anyhow::bail!(
@@ -108,6 +126,15 @@ impl WorktreeManager {
         }
 
         Ok(worktree_path)
+    }
+
+    fn branch_exists(&self, branch: &str) -> bool {
+        Command::new("git")
+            .args(["rev-parse", "--verify", branch])
+            .current_dir(&self.repo_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
@@ -382,5 +409,35 @@ mod tests {
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         let result = manager.create_worktree("test-feature", "nonexistent-branch", worktree_dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_worktree_for_existing_branch() {
+        let repo = setup_git_repo();
+        let worktree_dir = TempDir::new().unwrap();
+
+        // Create a branch first
+        Command::new("git")
+            .args(["branch", "existing-feature"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
+        let worktree_path = manager
+            .create_worktree("existing-feature", "main", worktree_dir.path())
+            .unwrap();
+
+        assert!(worktree_path.exists());
+        assert!(worktree_path.join("README.md").exists());
+
+        // Verify we're on the existing branch
+        let output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&worktree_path)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(branch.trim(), "existing-feature");
     }
 }

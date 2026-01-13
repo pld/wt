@@ -22,17 +22,36 @@ git clone https://github.com/pld/wt.git && cd wt && ./install.sh
 ### Interactive Mode
 
 ```bash
-wt new feat-auth            # Create workspace (new branch from main)
+wt new feat-auth            # Create workspace and enter subshell
 wt new feat-pay -b develop  # Create from different base branch
-wt ls                       # List workspaces
+wt use feat-auth            # Enter existing workspace subshell
+wt ls                       # Interactive picker to switch workspaces
 wt rm feat-auth             # Remove workspace
 wt which                    # Show current worktree name
+exit                        # Leave workspace subshell
 ```
 
-Navigate to workspaces:
+Example session:
 ```bash
-cd $(wt new feat-auth)      # Create and cd in one step
-pushd $(wt new feat-pay)    # Create and pushd (popd to return)
+$ wt new feat-auth
+Entering worktree: feat-auth
+(wt: feat-auth) $                   # Prompt shows current workspace
+
+# Work on your feature...
+(wt: feat-auth) $ git commit -m "add auth"
+
+# Switch to another workspace
+(wt: feat-auth) $ wt ls
+> feat-auth *
+  feat-payments
+  ← exit
+
+# Exit when done
+(wt: feat-auth) $ exit
+
+--- Exiting wt shell ---
+Working tree clean.
+$                                   # Back in main repo
 ```
 
 Merge when done:
@@ -69,13 +88,24 @@ wt run tasks.yaml --dry-run  # Preview what would happen
 ## CLI Reference
 
 ```
-wt new <name> [-b base]   Create workspace (default base: main)
-wt ls                     List all workspaces
+wt new [name] [-b base]   Create workspace and enter subshell
+                          name: defaults to current branch (fails on root branch)
+                          base: defaults to main
+wt use [name]             Enter existing workspace subshell (auto-detect if in worktree)
+wt ls                     Interactive picker to switch workspaces
 wt rm <name>              Remove workspace
 wt which                  Print current worktree name ("main" if in main repo)
 wt run <config>           Batch orchestration from YAML
 wt -d <dir> <cmd>         Use custom worktree directory (default: .worktrees)
 ```
+
+### Environment Variables
+
+Inside a wt subshell, these environment variables are available:
+- `WT_NAME` - Name of the current worktree
+- `WT_BRANCH` - Git branch of the worktree
+- `WT_PATH` - Full path to the worktree directory
+- `WT_ACTIVE` - Set to "1" when inside a wt subshell
 
 ## How It Works
 

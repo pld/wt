@@ -87,10 +87,11 @@ fn test_ensure_worktrees_in_gitignore_creates_file() {
 
     let repo = setup_git_repo();
     let gitignore_path = repo.path().join(".gitignore");
+    let worktree_dir = repo.path().join(".worktrees");
 
     assert!(!gitignore_path.exists());
 
-    ensure_worktrees_in_gitignore(repo.path()).unwrap();
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
 
     assert!(gitignore_path.exists());
     let content = fs::read_to_string(&gitignore_path).unwrap();
@@ -103,10 +104,11 @@ fn test_ensure_worktrees_in_gitignore_appends_to_existing() {
 
     let repo = setup_git_repo();
     let gitignore_path = repo.path().join(".gitignore");
+    let worktree_dir = repo.path().join(".worktrees");
 
     fs::write(&gitignore_path, "node_modules\n").unwrap();
 
-    ensure_worktrees_in_gitignore(repo.path()).unwrap();
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
 
     let content = fs::read_to_string(&gitignore_path).unwrap();
     assert!(content.contains("node_modules"));
@@ -119,10 +121,11 @@ fn test_ensure_worktrees_in_gitignore_idempotent() {
 
     let repo = setup_git_repo();
     let gitignore_path = repo.path().join(".gitignore");
+    let worktree_dir = repo.path().join(".worktrees");
 
-    ensure_worktrees_in_gitignore(repo.path()).unwrap();
-    ensure_worktrees_in_gitignore(repo.path()).unwrap();
-    ensure_worktrees_in_gitignore(repo.path()).unwrap();
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
 
     let content = fs::read_to_string(&gitignore_path).unwrap();
     let count = content.lines().filter(|l| l.trim() == ".worktrees").count();
