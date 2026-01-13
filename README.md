@@ -6,6 +6,12 @@ Parallel workspaces for agent sandboxes.
 
 `wt` creates isolated git worktrees where AI agents can work without stepping on each other. Each workspace is its own branch—agents work in parallel, you merge results when done.
 
+- **Run multiple agents simultaneously** — each in their own workspace, no conflicts
+- **Instant context switching** — jump between tasks without stashing or committing
+- **Branch isolation** — agents can't accidentally modify each other's work
+- **Zero overhead** — workspaces share git history, no disk duplication
+- **Simple cleanup** — remove workspaces when done, branches stay for merging
+
 ## Installation
 
 ```bash
@@ -19,60 +25,117 @@ git clone https://github.com/pld/wt.git && cd wt && ./install.sh
 
 ## Usage
 
-### Interactive Mode
+### Create a workspace
 
 ```bash
-wt new feat-auth            # Create workspace and enter subshell
-wt new feat-pay -b develop  # Create from different base branch
-wt use feat-auth            # Enter existing workspace subshell
-wt ls                       # Interactive picker to switch workspaces
-wt rm feat-auth             # Remove workspace
-wt which                    # Show current worktree name
-exit                        # Leave workspace subshell
+$ wt new feature/auth
+Entering worktree: feature/auth
+(wt: feature/auth) $              # You're now in the workspace
 ```
 
-Example session:
+Or from a different base branch:
 ```bash
-$ wt new feat-auth
-Entering worktree: feat-auth
-(wt: feat-auth) $                   # Prompt shows current workspace
+$ wt new hotfix-login -b develop
+```
 
-# Work on your feature...
-(wt: feat-auth) $ git commit -m "add auth"
+If you're already on a feature branch, just run `wt new` to move your work to a workspace:
+```bash
+$ git checkout -b feature/payments
+# ... make some changes ...
+$ wt new
+Stashing uncommitted changes...
+Switching to main...
+Entering worktree: feature/payments
+(wt: feature/payments) $          # Your changes are here
+```
 
-# Switch to another workspace
-(wt: feat-auth) $ wt ls
-> feat-auth *
-  feat-payments
-  ← exit
+### Switch workspaces
 
-# Exit when done
-(wt: feat-auth) $ exit
+```bash
+(wt: feature/auth) $ wt ls
+Select worktree:
+> feature/auth *
+  feature/payments
+  bugfix/header
+  ← cancel
+```
+
+Use arrow keys to select, Enter to switch.
+
+### Enter existing workspace
+
+```bash
+$ wt use feature/payments
+Entering worktree: feature/payments
+(wt: feature/payments) $
+```
+
+### Remove a workspace
+
+```bash
+$ wt rm
+Remove worktree:
+> feature/auth
+  feature/payments
+  bugfix/header
+  ← cancel
+```
+
+Or directly: `wt rm feature/auth`
+
+### Exit workspace
+
+```bash
+(wt: feature/auth) $ exit
 
 --- Exiting wt shell ---
-Working tree clean.
-$                                   # Back in main repo
+Uncommitted changes:
+ M src/auth.rs
+$                                 # Back in main repo
 ```
 
-Merge when done:
+### Merge when done
+
 ```bash
-git merge feat-auth        # From main branch
+$ git merge feature/auth
 ```
 
-### Batch Mode
+## CLI Reference
 
-For automated orchestration, use a config file:
+```
+wt new [name] [-b base]   Create workspace and enter it
+                          name: defaults to current branch
+                          base: defaults to main
+wt use [name]             Enter existing workspace
+wt ls                     Interactive workspace picker
+wt rm [name]              Remove workspace (interactive if no name)
+wt which                  Print current workspace name
+wt run <config>           Batch orchestration from YAML
+wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
+```
+
+### Environment Variables
+
+Inside a workspace shell:
+- `WT_NAME` - Workspace name
+- `WT_BRANCH` - Git branch
+- `WT_PATH` - Full path to workspace
+- `WT_ACTIVE` - Set to "1"
+
+## Batch Mode
+
+For automated orchestration:
 
 ```yaml
 # tasks.yaml
 base_branch: main
 
 tasks:
-  - id: feat-auth
+  - id: feature/auth
     prompt: "Implement OAuth2"
     agent: claude-code
 
-  - id: feat-payments
+  - id: feature/payments
     prompt: "Add Stripe"
     agent: claude-code
 
@@ -81,74 +144,19 @@ cleanup: auto
 ```
 
 ```bash
-wt run tasks.yaml          # Run all tasks in parallel
-wt run tasks.yaml --dry-run  # Preview what would happen
+wt run tasks.yaml
+wt run tasks.yaml --dry-run
 ```
-
-## CLI Reference
-
-```
-wt new [name] [-b base]   Create workspace and enter subshell
-                          name: defaults to current branch (fails on root branch)
-                          base: defaults to main
-wt use [name]             Enter existing workspace subshell (auto-detect if in worktree)
-wt ls                     Interactive picker to switch workspaces
-wt rm <name>              Remove workspace
-wt which                  Print current worktree name ("main" if in main repo)
-wt run <config>           Batch orchestration from YAML
-wt -d <dir> <cmd>         Use custom worktree directory (default: .worktrees)
-```
-
-### Environment Variables
-
-Inside a wt subshell, these environment variables are available:
-- `WT_NAME` - Name of the current worktree
-- `WT_BRANCH` - Git branch of the worktree
-- `WT_PATH` - Full path to the worktree directory
-- `WT_ACTIVE` - Set to "1" when inside a wt subshell
 
 ## How It Works
 
-Each workspace is a git worktree—a separate directory with its own branch, sharing the same `.git`:
-
 ```
-~/myrepo/                      # main branch (your primary checkout)
-~/myrepo/.worktrees/feat-auth/ # feat-auth branch (workspace 1)
-~/myrepo/.worktrees/feat-pay/  # feat-pay branch (workspace 2)
+~/myrepo/                              # main branch
+~/myrepo/.worktrees/feature--auth/     # feature/auth workspace
+~/myrepo/.worktrees/feature--payments/ # feature/payments workspace
 ```
 
-No disk duplication. All branches share history. Standard git merge/rebase works.
-
-The `.worktrees` directory is automatically added to `.gitignore`.
-
-## Config Reference (Batch Mode)
-
-```yaml
-base_branch: main              # Required: branch to fork from
-worktree_dir: .worktrees       # Optional: where to create workspaces
-
-tasks:
-  - id: feat-auth              # Branch/workspace name
-    prompt: "Description"      # What the task does
-    agent: claude-code         # Command to run
-
-merge_strategy: squash         # squash | rebase | manual
-cleanup: auto                  # auto | manual | keep-on-error
-```
-
-## Development
-
-```bash
-cargo build
-cargo test
-cargo build --release    # 1.5MB binary
-```
-
-## Releasing
-
-Push to `main` → GitHub Actions builds all platforms → `latest` release updated.
-
-Platforms: Linux x86_64/ARM64, macOS Intel/Apple Silicon, Windows x86_64
+Each workspace is a git worktree—separate directory, own branch, shared `.git`. No disk duplication. Standard git merge/rebase works.
 
 ## License
 
