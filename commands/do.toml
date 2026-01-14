@@ -1,0 +1,27 @@
+prompt = """Work on issue {{args}} in an isolated git worktree.
+
+Parse the argument:
+- `gh <number>` → GitHub issue
+- `sc <number>` → Shortcut story
+
+For GitHub issues, fetch details:
+!{echo "Fetching issue..."}
+Then run: gh issue view <number> --json title,body,labels,assignees
+
+For Shortcut stories:
+- First try the Shortcut MCP if configured
+- Otherwise use: curl -s -H "Shortcut-Token: $SHORTCUT_API_TOKEN" "https://api.app.shortcut.com/api/v3/stories/<id>"
+- Use the branch name from the story metadata (branches field)
+
+For GitHub issues, derive a branch name like gh-<number>-<slug>.
+
+Create the isolated worktree:
+!{wt new <branch-name> --print-path}
+
+Work in that directory for all file operations.
+
+When done:
+- Commit with issue reference (Fixes #N or [sc-N])
+- Offer to create PR with gh pr create
+- Remind about cleanup with wt rm <branch>
+"""

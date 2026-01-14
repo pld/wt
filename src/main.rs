@@ -43,6 +43,9 @@ enum Commands {
         /// Base branch to create from
         #[arg(short, default_value = "main")]
         b: String,
+        /// Print path instead of entering shell (for scripts/agents)
+        #[arg(long)]
+        print_path: bool,
     },
     /// Enter an existing workspace subshell
     Use {
@@ -121,7 +124,7 @@ fn main() -> Result<()> {
     let config = RepoConfig::new(&cli.dir)?;
 
     match cli.command {
-        Commands::New { name, b } => cmd_new(&config, name, &b),
+        Commands::New { name, b, print_path } => cmd_new(&config, name, &b, print_path),
         Commands::Use { name } => cmd_use(&config, name),
         Commands::Ls => cmd_ls(&config),
         Commands::Rm { name } => cmd_rm(&config, name),
@@ -129,7 +132,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str) -> Result<()> {
+fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str, print_path: bool) -> Result<()> {
     check_not_in_worktree(&config.root)?;
 
     let current_branch = get_current_branch()?;
@@ -176,7 +179,11 @@ fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str) -> Result<()> 
         }
     }
 
-    spawn_wt_shell(&path, &name, &name)?;
+    if print_path {
+        println!("{}", path.display());
+    } else {
+        spawn_wt_shell(&path, &name, &name)?;
+    }
     Ok(())
 }
 

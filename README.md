@@ -104,8 +104,9 @@ $ git merge feature/auth
 
 ```
 wt new [name] [-b base]   Create workspace and enter it
-                          name: defaults to current branch
+      [--print-path]      name: defaults to current branch
                           base: defaults to main
+                          --print-path: output path only (for scripts)
 wt use [name]             Enter existing workspace
 wt ls                     Interactive workspace picker
 wt rm [name]              Remove workspace (interactive if no name)
@@ -130,6 +131,21 @@ Inside a workspace shell:
 ```
 
 Each workspace is a git worktree—separate directory, own branch, shared `.git`. No disk duplication. Standard git merge/rebase works.
+
+## AI Agent Integration
+
+Installation includes a `/do` command for Claude Code and Gemini CLI (installed only if you have them configured):
+
+```
+/do gh 123      # Work on GitHub issue #123 in isolated worktree
+/do sc 45678    # Work on Shortcut story in isolated worktree
+```
+
+The command automatically:
+1. Fetches issue/story details (uses Shortcut MCP if configured)
+2. Creates an isolated worktree (uses branch name from Shortcut metadata)
+3. Works on the task
+4. Commits with issue reference
 
 ## License
 

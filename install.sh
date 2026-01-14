@@ -73,6 +73,39 @@ SHELL_CONFIG=$(setup_shell_config)
 ALIAS_LINE="alias wt='$BIN_PATH'"
 FISH_ALIAS="alias wt '$BIN_PATH'"
 
+# Install CLI agent skills (only if user has the tool configured)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GITHUB_RAW="https://raw.githubusercontent.com/pld/wt/main/commands"
+
+install_claude_skill() {
+    if [ -d "$HOME/.claude" ]; then
+        CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
+        echo "Installing Claude Code skills..."
+        mkdir -p "$CLAUDE_COMMANDS_DIR"
+        if [ -d "$SCRIPT_DIR/commands" ]; then
+            cp "$SCRIPT_DIR/commands/"*.md "$CLAUDE_COMMANDS_DIR/" 2>/dev/null || true
+        else
+            curl -fsSL "$GITHUB_RAW/do.md" -o "$CLAUDE_COMMANDS_DIR/do.md" 2>/dev/null || true
+        fi
+    fi
+}
+
+install_gemini_skill() {
+    if [ -d "$HOME/.gemini" ]; then
+        GEMINI_COMMANDS_DIR="$HOME/.gemini/commands"
+        echo "Installing Gemini CLI commands..."
+        mkdir -p "$GEMINI_COMMANDS_DIR"
+        if [ -d "$SCRIPT_DIR/commands" ]; then
+            cp "$SCRIPT_DIR/commands/"*.toml "$GEMINI_COMMANDS_DIR/" 2>/dev/null || true
+        else
+            curl -fsSL "$GITHUB_RAW/do.toml" -o "$GEMINI_COMMANDS_DIR/do.toml" 2>/dev/null || true
+        fi
+    fi
+}
+
+install_claude_skill
+install_gemini_skill
+
 if [ -n "$SHELL_CONFIG" ]; then
     mkdir -p "$(dirname "$SHELL_CONFIG")"
     if [ "$CURRENT_SHELL" = "fish" ]; then
