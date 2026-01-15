@@ -132,6 +132,26 @@ Inside a workspace shell:
 
 Each workspace is a git worktree—separate directory, own branch, shared `.git`. No disk duplication. Standard git merge/rebase works.
 
+### Git Push
+
+Workspaces are configured with upstream tracking automatically. Just `git push`—no need for `-u origin HEAD`.
+
+### Local Files (.env, etc.)
+
+Gitignored files like `.env` aren't copied to worktrees by default. To symlink them automatically, add a `# wt copy` section to your `.gitignore`:
+
+```gitignore
+node_modules/
+*.log
+
+# wt copy
+.env
+.env.local
+config/local_settings.py
+```
+
+Files listed after `# wt copy` (until the next `#` comment or blank line) will be symlinked from the main repo into new workspaces.
+
 ## AI Agent Integration
 
 Installation includes a `/do` command for Claude Code and Gemini CLI (installed only if you have them configured):

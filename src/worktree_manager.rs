@@ -12,6 +12,54 @@ fn unsanitize_from_path(name: &str) -> String {
     name.replace("--", "/")
 }
 
+fn parse_wt_copy_paths(repo_path: &Path) -> Vec<PathBuf> {
+    let gitignore_path = repo_path.join(".gitignore");
+    let Ok(content) = fs::read_to_string(&gitignore_path) else {
+        return Vec::new();
+    };
+
+    let mut paths = Vec::new();
+    let mut in_wt_copy_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "# wt copy" {
+            in_wt_copy_section = true;
+            continue;
+        }
+        if in_wt_copy_section {
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                break;
+            }
+            paths.push(PathBuf::from(trimmed));
+        }
+    }
+
+    paths
+}
+
+fn symlink_wt_copy_files(repo_path: &Path, worktree_path: &Path) {
+    for rel_path in parse_wt_copy_paths(repo_path) {
+        let src = repo_path.join(&rel_path);
+        let dst = worktree_path.join(&rel_path);
+
+        if !src.exists() {
+            continue;
+        }
+
+        // Create parent directories if needed
+        if let Some(parent) = dst.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        // Create symlink (Unix)
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&src, &dst);
+        }
+    }
+}
+
 pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> Result<()> {
     let gitignore_path = repo_path.join(".gitignore");
 
@@ -134,6 +182,25 @@ impl WorktreeManager {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+
+        // Set up upstream tracking so `git push` works without -u origin HEAD
+        Command::new("git")
+            .args(["config", &format!("branch.{}.remote", task_id), "origin"])
+            .current_dir(&worktree_path)
+            .output()
+            .ok();
+        Command::new("git")
+            .args([
+                "config",
+                &format!("branch.{}.merge", task_id),
+                &format!("refs/heads/{}", task_id),
+            ])
+            .current_dir(&worktree_path)
+            .output()
+            .ok();
+
+        // Symlink files from `# wt copy` section in .gitignore
+        symlink_wt_copy_files(&self.repo_path, &worktree_path);
 
         Ok(worktree_path)
     }
