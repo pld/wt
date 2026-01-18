@@ -111,8 +111,90 @@ wt use [name]             Enter existing workspace
 wt ls                     Interactive workspace picker
 wt rm [name]              Remove workspace (interactive if no name)
 wt which                  Print current workspace name
+wt session                Attach to tmux session (see Session Mode)
+wt session ls             List workspaces in session (with agent status)
+wt session add <name>     Add workspace to session
+      [-b base]           base: defaults to main
+      [--panes 2|3]       override pane count
+wt session rm <name>      Remove workspace from session
+wt session watch [-i N]   Live status dashboard (auto-created in session)
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
 ```
+
+## Session Mode
+
+Manage multiple workspaces in a tmux session with dedicated panes for AI agents, terminal, and optionally an editor. A status window shows live agent activity.
+
+```bash
+# Add workspaces to session (creates status window on first add)
+$ wt session add feature/auth
+$ wt session add feature/payments
+
+# List workspaces with agent status
+$ wt session ls
+* [1] feature/auth (active) [2 panes]    # agent running
+  [2] feature/payments (idle) [2 panes]   # agent at shell prompt
+
+# Attach to session (or switch if detached)
+$ wt session
+
+# Remove workspace from session
+$ wt session rm feature/auth
+
+# Commands work from inside the session too
+# (switches windows instead of attaching)
+```
+
+### Status Window
+
+When you create a session, window 0 is a status dashboard that shows all workspaces and their agent status:
+- `●` green = agent active (running a command)
+- `○` gray = agent idle (at shell prompt)
+
+The status auto-refreshes every 2 seconds. You can also run `wt session watch` manually in any pane.
+
+### Pane Layouts
+
+**2 panes (default):**
+```
++---------------------------+---------------------------+
+|                           |                           |
+|  Agent CLI                |  Terminal                 |
+|  (claude, aider, etc.)    |  (tests, git, etc.)       |
+|                           |                           |
++---------------------------+---------------------------+
+```
+
+**3 panes:**
+```
++---------------------------+---------------------------+
+|  Agent CLI                |                           |
+|  (claude, aider, etc.)    |                           |
++---------------------------+        Editor             |
+|  Terminal                 |        (nvim, vim)        |
+|  (tests, git, etc.)       |                           |
++---------------------------+---------------------------+
+```
+
+### Configuration
+
+Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
+
+```toml
+[session]
+panes = 2           # 2 or 3 (default: 2)
+agent_cmd = "claude"  # command for agent pane
+editor_cmd = "nvim"   # command for editor pane (when panes=3)
+```
+
+Precedence: `--panes` flag > `.wt.toml` > `~/.wt/config.toml` > defaults
+
+### Navigation
+
+Standard tmux keybindings:
+- `C-b` + arrow keys — switch panes
+- `C-b n` / `C-b p` — next/previous window
+- `C-b d` — detach from session
 
 ### Environment Variables
 
@@ -169,4 +251,4 @@ The command automatically:
 
 ## License
 
-MIT
+Apache-2.0
