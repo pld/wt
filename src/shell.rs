@@ -44,10 +44,8 @@ fn spawn_shell(mut cmd: Command) -> Result<()> {
 }
 
 fn spawn_bash(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
-    let rcfile_content = format!(
-        "[ -f ~/.bashrc ] && source ~/.bashrc; PS1=\"(wt: {}) $PS1\"",
-        wt_name
-    );
+    let rcfile_content =
+        "[ -f ~/.bashrc ] && source ~/.bashrc; PS1=\"(wt) $PS1\"".to_string();
     let temp_rc = std::env::temp_dir().join(format!("wt-bashrc-{}", std::process::id()));
     std::fs::write(&temp_rc, &rcfile_content)?;
 
@@ -60,7 +58,7 @@ fn spawn_bash(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> 
 }
 
 fn spawn_zsh(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
-    let temp_dir = create_zsh_wrapper(wt_name)?;
+    let temp_dir = create_zsh_wrapper()?;
 
     let mut cmd = shell_cmd(shell_path, wt_path, wt_name, branch);
     cmd.env("ZDOTDIR", &temp_dir)
@@ -77,30 +75,26 @@ fn spawn_zsh(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> R
 fn spawn_fish(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
     let mut cmd = shell_cmd(shell_path, wt_path, wt_name, branch);
     cmd.arg("--init-command")
-        .arg(format!(
+        .arg(
             "functions -c fish_prompt _wt_orig_prompt 2>/dev/null; \
-             function fish_prompt; echo -n '(wt: {}) '; _wt_orig_prompt; end",
-            wt_name
-        ));
+             function fish_prompt; echo -n '(wt) '; _wt_orig_prompt; end",
+        );
     spawn_shell(cmd)
 }
 
-fn create_zsh_wrapper(wt_name: &str) -> Result<PathBuf> {
+fn create_zsh_wrapper() -> Result<PathBuf> {
     let temp_dir = std::env::temp_dir().join(format!("wt-zsh-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)?;
 
-    let zshrc_content = format!(
-        r#"# Source user's zshrc
+    let zshrc_content = r#"# Source user's zshrc
 if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
     source "$_WT_ORIG_ZDOTDIR/.zshrc"
 elif [[ -f "$HOME/.zshrc" ]]; then
     source "$HOME/.zshrc"
 fi
 # Add wt indicator to prompt
-PROMPT="(wt: {}) $PROMPT"
-"#,
-        wt_name
-    );
+PROMPT="(wt) $PROMPT"
+"#;
 
     std::fs::write(temp_dir.join(".zshrc"), zshrc_content)?;
     Ok(temp_dir)

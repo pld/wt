@@ -183,18 +183,10 @@ impl WorktreeManager {
             );
         }
 
-        // Set up upstream tracking so `git push` works without -u origin HEAD
+        // Set up autoSetupRemote so `git push` works without -u origin HEAD
+        // (avoids "upstream is gone" warning before first push)
         Command::new("git")
-            .args(["config", &format!("branch.{}.remote", task_id), "origin"])
-            .current_dir(&worktree_path)
-            .output()
-            .ok();
-        Command::new("git")
-            .args([
-                "config",
-                &format!("branch.{}.merge", task_id),
-                &format!("refs/heads/{}", task_id),
-            ])
+            .args(["config", "push.autoSetupRemote", "true"])
             .current_dir(&worktree_path)
             .output()
             .ok();
@@ -216,7 +208,7 @@ impl WorktreeManager {
 
     pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
         let output = Command::new("git")
-            .args(&["worktree", "list", "--porcelain"])
+            .args(["worktree", "list", "--porcelain"])
             .current_dir(&self.repo_path)
             .output()
             .context("Failed to execute git worktree list")?;

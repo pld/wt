@@ -1,16 +1,29 @@
 # wt
 
-Parallel workspaces for agent sandboxes.
+[![Tests](https://github.com/pld/wt/actions/workflows/test.yml/badge.svg)](https://github.com/pld/wt/actions/workflows/test.yml)
 
-## What It Does
+Run multiple AI agents on the same codebase without them clobbering each other.
 
-`wt` creates isolated git worktrees where AI agents can work without stepping on each other. Each workspace is its own branch—agents work in parallel, you merge results when done.
+## The Problem
 
-- **Run multiple agents simultaneously** — each in their own workspace, no conflicts
-- **Instant context switching** — jump between tasks without stashing or committing
-- **Branch isolation** — agents can't accidentally modify each other's work
-- **Zero overhead** — workspaces share git history, no disk duplication
-- **Simple cleanup** — remove workspaces when done, branches stay for merging
+You're using Claude Code, Cursor, Aider, or similar. You want to run 3 agents on 3 different tasks. But they all want to edit the same files, and now you're playing traffic cop.
+
+Git worktrees solve this—but the commands are verbose, cleanup is manual, and you're forgetting which worktree is where.
+
+## The Solution
+
+`wt` creates isolated git worktrees—each agent gets its own directory, its own branch, full access to the repo. They work in parallel, you merge when done.
+
+![wt demo](docs/demo.gif)
+
+```
+~/myrepo/                     # main - you're here
+~/myrepo/.worktrees/auth/     # agent 1 working on auth
+~/myrepo/.worktrees/payments/ # agent 2 working on payments
+~/myrepo/.worktrees/bugfix/   # agent 3 fixing that bug
+```
+
+**Session mode** manages all your agents in one tmux session with a live status dashboard showing which agents are active or idle.
 
 ## Installation
 
@@ -116,24 +129,25 @@ wt session ls             List workspaces in session (with agent status)
 wt session add <name>     Add workspace to session
       [-b base]           base: defaults to main
       [--panes 2|3]       override pane count
+      [--watch]           add status window with live agent status
 wt session rm <name>      Remove workspace from session
-wt session watch [-i N]   Live status dashboard (auto-created in session)
+wt session watch [-i N]   Live status dashboard (or use --watch above)
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
 ```
 
 ## Session Mode
 
-Manage multiple workspaces in a tmux session with dedicated panes for AI agents, terminal, and optionally an editor. A status window shows live agent activity.
+Manage multiple workspaces in a tmux session with dedicated panes for AI agents, terminal, and optionally an editor.
 
 ```bash
-# Add workspaces to session (creates status window on first add)
+# Add workspaces to session
 $ wt session add feature/auth
 $ wt session add feature/payments
 
 # List workspaces with agent status
 $ wt session ls
-* [1] feature/auth (active) [2 panes]    # agent running
-  [2] feature/payments (idle) [2 panes]   # agent at shell prompt
+* [0] feature/auth (active) [2 panes]    # agent running
+  [1] feature/payments (idle) [2 panes]   # agent at shell prompt
 
 # Attach to session (or switch if detached)
 $ wt session
@@ -147,11 +161,16 @@ $ wt session rm feature/auth
 
 ### Status Window
 
-When you create a session, window 0 is a status dashboard that shows all workspaces and their agent status:
+Use `--watch` to add a status window showing all workspaces and their agent status:
+
+```bash
+wt session add feature/auth --watch
+```
+
 - `●` green = agent active (running a command)
 - `○` gray = agent idle (at shell prompt)
 
-The status auto-refreshes every 2 seconds. You can also run `wt session watch` manually in any pane.
+Or run `wt session watch` manually in any pane.
 
 ### Pane Layouts
 

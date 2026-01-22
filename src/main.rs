@@ -85,6 +85,9 @@ enum SessionAction {
         /// Override pane count (2 or 3)
         #[arg(long)]
         panes: Option<u8>,
+        /// Create status window with live agent status
+        #[arg(long)]
+        watch: bool,
     },
     /// Remove a worktree from the session
     Rm {
@@ -440,8 +443,8 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
     match action {
         None => cmd_session_attach(&tmux),
         Some(SessionAction::Ls) => cmd_session_ls(&tmux),
-        Some(SessionAction::Add { name, base, panes }) => {
-            cmd_session_add(config, &tmux, &wt_config, &name, &base, panes)
+        Some(SessionAction::Add { name, base, panes, watch }) => {
+            cmd_session_add(config, &tmux, &wt_config, &name, &base, panes, watch)
         }
         Some(SessionAction::Rm { name }) => cmd_session_rm(&tmux, &name),
         Some(SessionAction::Watch { interval }) => cmd_session_watch(&tmux, interval),
@@ -497,6 +500,7 @@ fn cmd_session_add(
     name: &str,
     base: &str,
     panes_override: Option<u8>,
+    watch: bool,
 ) -> Result<()> {
     check_not_in_worktree(&config.root)?;
 
@@ -521,16 +525,26 @@ fn cmd_session_add(
     let session_exists = tmux.session_exists()?;
     if !session_exists {
         eprintln!("Creating tmux session: {}", SESSION_NAME);
-        // Create session with status window first
-        tmux.create_session("status", &config.root)?;
-        // Send watch command to status window
-        tmux.send_keys("status", 0, "wt session watch")?;
-        // Now create the worktree window
-        tmux.create_window(name, &worktree_path)?;
+        if watch {
+            // Create session with status window first
+            tmux.create_session("status", &config.root)?;
+            tmux.send_keys("status", 0, "wt session watch")?;
+            tmux.create_window(name, &worktree_path)?;
+        } else {
+            // Create session with worktree as first window
+            tmux.create_session(name, &worktree_path)?;
+        }
         tmux.setup_worktree_layout(name, &worktree_path, panes, &wt_config.session)?;
     } else {
-        // Check if window already exists
         let windows = tmux.list_windows()?;
+
+        // Add status window if --watch and not present
+        if watch && !windows.iter().any(|w| w.name == "status") {
+            tmux.create_window("status", &config.root)?;
+            tmux.send_keys("status", 0, "wt session watch")?;
+        }
+
+        // Check if worktree window already exists
         if windows.iter().any(|w| w.name == name) {
             eprintln!("Window '{}' already exists in session.", name);
             if inside_session {
