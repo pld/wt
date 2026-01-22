@@ -93,8 +93,7 @@ impl SessionState {
             windows.iter().map(|w| w.name.clone()).collect();
 
         // Remove worktrees that no longer have windows
-        self.worktrees
-            .retain(|name, _| window_names.contains(name));
+        self.worktrees.retain(|name, _| window_names.contains(name));
 
         // Update pane counts
         for window in &windows {

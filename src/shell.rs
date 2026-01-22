@@ -44,8 +44,7 @@ fn spawn_shell(mut cmd: Command) -> Result<()> {
 }
 
 fn spawn_bash(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
-    let rcfile_content =
-        "[ -f ~/.bashrc ] && source ~/.bashrc; PS1=\"(wt) $PS1\"".to_string();
+    let rcfile_content = "[ -f ~/.bashrc ] && source ~/.bashrc; PS1=\"(wt) $PS1\"".to_string();
     let temp_rc = std::env::temp_dir().join(format!("wt-bashrc-{}", std::process::id()));
     std::fs::write(&temp_rc, &rcfile_content)?;
 
@@ -61,11 +60,10 @@ fn spawn_zsh(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> R
     let temp_dir = create_zsh_wrapper()?;
 
     let mut cmd = shell_cmd(shell_path, wt_path, wt_name, branch);
-    cmd.env("ZDOTDIR", &temp_dir)
-        .env(
-            "_WT_ORIG_ZDOTDIR",
-            std::env::var("ZDOTDIR").unwrap_or_else(|_| std::env::var("HOME").unwrap_or_default()),
-        );
+    cmd.env("ZDOTDIR", &temp_dir).env(
+        "_WT_ORIG_ZDOTDIR",
+        std::env::var("ZDOTDIR").unwrap_or_else(|_| std::env::var("HOME").unwrap_or_default()),
+    );
     spawn_shell(cmd)?;
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -74,11 +72,10 @@ fn spawn_zsh(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> R
 
 fn spawn_fish(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> Result<()> {
     let mut cmd = shell_cmd(shell_path, wt_path, wt_name, branch);
-    cmd.arg("--init-command")
-        .arg(
-            "functions -c fish_prompt _wt_orig_prompt 2>/dev/null; \
+    cmd.arg("--init-command").arg(
+        "functions -c fish_prompt _wt_orig_prompt 2>/dev/null; \
              function fish_prompt; echo -n '(wt) '; _wt_orig_prompt; end",
-        );
+    );
     spawn_shell(cmd)
 }
 

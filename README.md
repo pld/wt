@@ -43,7 +43,7 @@ git clone https://github.com/pld/wt.git && cd wt && ./install.sh
 ```bash
 $ wt new feature/auth
 Entering worktree: feature/auth
-(wt: feature/auth) $              # You're now in the workspace
+(wt) $              # You're now in the workspace
 ```
 
 Or from a different base branch:
@@ -59,13 +59,13 @@ $ wt new
 Stashing uncommitted changes...
 Switching to main...
 Entering worktree: feature/payments
-(wt: feature/payments) $          # Your changes are here
+(wt) $          # Your changes are here
 ```
 
 ### Switch workspaces
 
 ```bash
-(wt: feature/auth) $ wt ls
+(wt) $ wt ls
 Select worktree:
 > feature/auth *
   feature/payments
@@ -80,7 +80,7 @@ Use arrow keys to select, Enter to switch.
 ```bash
 $ wt use feature/payments
 Entering worktree: feature/payments
-(wt: feature/payments) $
+(wt) $
 ```
 
 ### Remove a workspace
@@ -99,7 +99,7 @@ Or directly: `wt rm feature/auth`
 ### Exit workspace
 
 ```bash
-(wt: feature/auth) $ exit
+(wt) $ exit
 
 --- Exiting wt shell ---
 Uncommitted changes:

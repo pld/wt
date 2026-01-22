@@ -101,7 +101,8 @@ impl Config {
 
     /// Ensure ~/.wt directory exists
     pub fn ensure_wt_dir() -> Result<std::path::PathBuf> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
         let wt_dir = home.join(".wt");
         std::fs::create_dir_all(&wt_dir)?;
         Ok(wt_dir)

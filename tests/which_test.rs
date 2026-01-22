@@ -7,7 +7,7 @@ fn setup_git_repo() -> TempDir {
     let repo_path = temp_dir.path();
 
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(repo_path)
         .output()
         .unwrap();
@@ -66,7 +66,11 @@ fn test_which_returns_worktree_name_in_worktree() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "Failed to create worktree: {:?}", output);
+    assert!(
+        output.status.success(),
+        "Failed to create worktree: {:?}",
+        output
+    );
 
     let result = get_current_worktree_name(&worktree_path).unwrap();
     assert_eq!(result, "feature-xyz");
@@ -153,4 +157,3 @@ fn test_check_not_in_worktree_rejects_worktrees_dir() {
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("nested"));
 }
-

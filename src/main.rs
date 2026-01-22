@@ -14,7 +14,11 @@ use wt::worktree_manager::{
 };
 
 #[derive(Parser)]
-#[command(name = "wt", version, about = "Parallel workspaces for agent sandboxes")]
+#[command(
+    name = "wt",
+    version,
+    about = "Parallel workspaces for agent sandboxes"
+)]
 struct Cli {
     /// Worktree directory (relative to repo root)
     #[arg(short = 'd', long, global = true, default_value = ".worktrees")]
@@ -163,7 +167,11 @@ fn main() -> Result<()> {
     let config = RepoConfig::new(&cli.dir)?;
 
     match cli.command {
-        Commands::New { name, b, print_path } => cmd_new(&config, name, &b, print_path),
+        Commands::New {
+            name,
+            b,
+            print_path,
+        } => cmd_new(&config, name, &b, print_path),
         Commands::Use { name } => cmd_use(&config, name),
         Commands::Ls => cmd_ls(&config),
         Commands::Rm { name } => cmd_rm(&config, name),
@@ -333,19 +341,13 @@ fn pick_worktree(config: &RepoConfig, prompt: &str) -> Result<PickResult> {
     }
 
     let default = if let Some(ref name) = current_wt {
-        items
-            .iter()
-            .position(|i| i.starts_with(name))
-            .unwrap_or(0)
+        items.iter().position(|i| i.starts_with(name)).unwrap_or(0)
     } else {
         0
     };
 
     eprintln!("{}", prompt);
-    let selection = Select::new()
-        .items(&items)
-        .default(default)
-        .interact()?;
+    let selection = Select::new().items(&items).default(default).interact()?;
 
     let selected = &items[selection];
 
@@ -372,7 +374,8 @@ fn cmd_ls(config: &RepoConfig) -> Result<()> {
         PickResult::Cancelled => {}
         PickResult::Selected(name) => {
             let manager = WorktreeManager::new(config.root.clone())?;
-            let wt_info = manager.get_worktree_info(&name)?
+            let wt_info = manager
+                .get_worktree_info(&name)?
                 .ok_or_else(|| anyhow::anyhow!("Worktree not found"))?;
             spawn_wt_shell(&wt_info.path, &wt_info.task_id, &wt_info.branch)?;
         }
@@ -443,9 +446,12 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
     match action {
         None => cmd_session_attach(&tmux),
         Some(SessionAction::Ls) => cmd_session_ls(&tmux),
-        Some(SessionAction::Add { name, base, panes, watch }) => {
-            cmd_session_add(config, &tmux, &wt_config, &name, &base, panes, watch)
-        }
+        Some(SessionAction::Add {
+            name,
+            base,
+            panes,
+            watch,
+        }) => cmd_session_add(config, &tmux, &wt_config, &name, &base, panes, watch),
         Some(SessionAction::Rm { name }) => cmd_session_rm(&tmux, &name),
         Some(SessionAction::Watch { interval }) => cmd_session_watch(&tmux, interval),
     }

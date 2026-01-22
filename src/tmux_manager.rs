@@ -235,7 +235,13 @@ impl TmuxManager {
     fn get_agent_status(&self, window: &str) -> Result<AgentStatus> {
         let target = format!("{}:{}.0", self.session_name, window);
         let output = Command::new("tmux")
-            .args(["display-message", "-t", &target, "-p", "#{pane_current_command}"])
+            .args([
+                "display-message",
+                "-t",
+                &target,
+                "-p",
+                "#{pane_current_command}",
+            ])
             .output()
             .context("Failed to get pane command")?;
 

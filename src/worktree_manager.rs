@@ -71,8 +71,7 @@ pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> R
         .unwrap_or(".worktrees");
 
     if gitignore_path.exists() {
-        let content = fs::read_to_string(&gitignore_path)
-            .context("Failed to read .gitignore")?;
+        let content = fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
 
         if content.lines().any(|line| line.trim() == pattern) {
             return Ok(());
@@ -85,8 +84,7 @@ pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> R
         .open(&gitignore_path)
         .context("Failed to open .gitignore")?;
 
-    writeln!(file, "{}", pattern)
-        .context("Failed to write to .gitignore")?;
+    writeln!(file, "{}", pattern).context("Failed to write to .gitignore")?;
 
     Ok(())
 }
@@ -94,7 +92,11 @@ pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> R
 pub fn check_not_in_worktree(path: &Path) -> Result<()> {
     let mut current = path;
     while let Some(parent) = current.parent() {
-        if current.file_name().map(|n| n == ".worktrees").unwrap_or(false) {
+        if current
+            .file_name()
+            .map(|n| n == ".worktrees")
+            .unwrap_or(false)
+        {
             anyhow::bail!("Cannot create nested worktrees: already inside a .worktrees directory");
         }
         current = parent;
@@ -253,9 +255,7 @@ impl WorktreeManager {
         let task_id = if path == self.repo_path {
             String::new()
         } else {
-            let dir_name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Convert filesystem name back to original (-- -> /)
             unsanitize_from_path(dir_name)
         };
@@ -269,7 +269,8 @@ impl WorktreeManager {
 
     pub fn remove_worktree(&self, task_id: &str) -> Result<()> {
         // Look up the actual path from git
-        let wt_info = self.get_worktree_info(task_id)?
+        let wt_info = self
+            .get_worktree_info(task_id)?
             .ok_or_else(|| anyhow::anyhow!("Worktree '{}' not found", task_id))?;
 
         // If path doesn't exist on disk, just prune stale entries
@@ -331,7 +332,7 @@ mod tests {
         let repo_path = temp_dir.path();
 
         Command::new("git")
-            .args(&["init"])
+            .args(&["init", "-b", "main"])
             .current_dir(repo_path)
             .output()
             .unwrap();
@@ -484,7 +485,8 @@ mod tests {
         let worktree_dir = TempDir::new().unwrap();
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
-        let result = manager.create_worktree("test-feature", "nonexistent-branch", worktree_dir.path());
+        let result =
+            manager.create_worktree("test-feature", "nonexistent-branch", worktree_dir.path());
         assert!(result.is_err());
     }
 
