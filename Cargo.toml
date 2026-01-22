@@ -5,6 +5,9 @@ edition = "2021"
 authors = ["pld"]
 description = "Git worktree orchestrator for parallel agent sessions"
 license = "Apache-2.0"
+repository = "https://github.com/pld/wt"
+keywords = ["git", "worktree", "ai", "agent", "tmux"]
+categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
