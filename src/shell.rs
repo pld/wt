@@ -83,6 +83,42 @@ fn create_zsh_wrapper() -> Result<PathBuf> {
     let temp_dir = std::env::temp_dir().join(format!("wt-zsh-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)?;
 
+    // Create .zshenv to handle compdef before compinit
+    let zshenv_content = r#"# Pre-compinit compdef stub to prevent "command not found" errors
+# This queues compdef calls until compinit runs
+if ! type compdef &>/dev/null; then
+    typeset -a _wt_compdef_queue
+    _wt_compdef_queue=()
+    function compdef {
+        _wt_compdef_queue+=("${(j: :)${(q)@}}")
+    }
+    # Hook compinit to replay queued compdef calls
+    function _wt_replay_compdef {
+        unfunction compdef 2>/dev/null
+        autoload -Uz compdef
+        for cmd in "${_wt_compdef_queue[@]}"; do
+            eval "compdef $cmd"
+        done
+        unset _wt_compdef_queue
+        unfunction _wt_replay_compdef
+    }
+    # Wrap compinit to replay after it runs
+    function compinit {
+        unfunction compinit
+        autoload -Uz compinit
+        compinit "$@"
+        _wt_replay_compdef
+    }
+fi
+
+# Source user's zshenv
+if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshenv" ]]; then
+    source "$_WT_ORIG_ZDOTDIR/.zshenv"
+elif [[ -f "$HOME/.zshenv" ]]; then
+    source "$HOME/.zshenv"
+fi
+"#;
+
     let zshrc_content = r#"# Source user's zshrc
 if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
     source "$_WT_ORIG_ZDOTDIR/.zshrc"
@@ -93,6 +129,7 @@ fi
 PROMPT="(wt) $PROMPT"
 "#;
 
+    std::fs::write(temp_dir.join(".zshenv"), zshenv_content)?;
     std::fs::write(temp_dir.join(".zshrc"), zshrc_content)?;
     Ok(temp_dir)
 }
