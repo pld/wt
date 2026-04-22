@@ -54,7 +54,6 @@ struct SessionCmdContext<'a> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct SessionRmProbe {
     worktree_exists: bool,
-    panes_session_exists: bool,
     panes_has_worktree: bool,
     windows_session_name: String,
     windows_session_tracked: bool,
@@ -563,8 +562,7 @@ fn sorted_windows_sessions(state: &SessionState) -> Vec<(&String, &WindowsSessio
 fn probe_session_rm(context: &SessionCmdContext<'_>, name: &str) -> Result<SessionRmProbe> {
     let manager = WorktreeManager::new(context.repo.root.clone())?;
     let panes_tmux = TmuxManager::new(SESSION_NAME);
-    let panes_session_exists = panes_tmux.session_exists()?;
-    let panes_has_worktree = if panes_session_exists {
+    let panes_has_worktree = if panes_tmux.session_exists()? {
         panes_tmux
             .list_windows()?
             .into_iter()
@@ -585,7 +583,6 @@ fn probe_session_rm(context: &SessionCmdContext<'_>, name: &str) -> Result<Sessi
 
     Ok(SessionRmProbe {
         worktree_exists: manager.worktree_exists(name),
-        panes_session_exists,
         panes_has_worktree,
         windows_session_name,
         windows_session_tracked,
@@ -593,53 +590,55 @@ fn probe_session_rm(context: &SessionCmdContext<'_>, name: &str) -> Result<Sessi
     })
 }
 
-fn rm_hint(mode: SessionMode, name: &str, probe: &SessionRmProbe) -> Option<String> {
-    match mode {
-        SessionMode::Panes => {
-            if probe.windows_session_live {
-                let availability = if probe.windows_session_tracked {
-                    "tracked in windows mode"
-                } else {
-                    "available in windows mode"
-                };
-                Some(format!(
-                    "'{}' is {} as session '{}'. Try: wt session --mode windows rm {}",
-                    name, availability, probe.windows_session_name, name
-                ))
-            } else if probe.worktree_exists {
-                Some(format!(
-                    "Worktree '{}' exists but is not in the shared panes session. \
-                     Use 'wt rm {}' to remove the worktree or 'wt session --mode \
-                     panes add {}' to add it.",
-                    name, name, name
-                ))
-            } else {
-                None
-            }
-        }
-        SessionMode::Windows => {
-            if probe.panes_has_worktree {
-                Some(format!(
-                    "'{}' is in the shared panes session. Try: wt session --mode \
-                     panes rm {}",
-                    name, name
-                ))
-            } else if probe.worktree_exists && !probe.windows_session_tracked {
-                Some(format!(
-                    "Worktree '{}' exists but is not tracked in windows mode. Use \
-                     'wt rm {}' to remove the worktree or 'wt session --mode \
-                     windows add {}' to add it.",
-                    name, name, name
-                ))
-            } else {
-                None
-            }
-        }
+fn panes_rm_hint(name: &str, probe: &SessionRmProbe) -> Option<String> {
+    if probe.windows_session_live {
+        let availability = if probe.windows_session_tracked {
+            "tracked in windows mode"
+        } else {
+            "available in windows mode"
+        };
+        Some(format!(
+            "'{}' is {} as session '{}'. Try: wt session --mode windows rm {}",
+            name, availability, probe.windows_session_name, name
+        ))
+    } else if probe.worktree_exists {
+        Some(format!(
+            "Worktree '{}' exists but is not in the shared panes session. \
+             Use 'wt rm {}' to remove the worktree or 'wt session --mode \
+             panes add {}' to add it.",
+            name, name, name
+        ))
+    } else {
+        None
+    }
+}
+
+fn windows_rm_hint(name: &str, probe: &SessionRmProbe) -> Option<String> {
+    if probe.panes_has_worktree {
+        Some(format!(
+            "'{}' is in the shared panes session. Try: wt session --mode \
+             panes rm {}",
+            name, name
+        ))
+    } else if probe.worktree_exists && !probe.windows_session_tracked {
+        Some(format!(
+            "Worktree '{}' exists but is not tracked in windows mode. Use \
+             'wt rm {}' to remove the worktree or 'wt session --mode \
+             windows add {}' to add it.",
+            name, name, name
+        ))
+    } else {
+        None
     }
 }
 
 fn print_rm_hint(mode: SessionMode, name: &str, probe: &SessionRmProbe) {
-    if let Some(hint) = rm_hint(mode, name, probe) {
+    let hint = match mode {
+        SessionMode::Panes => panes_rm_hint(name, probe),
+        SessionMode::Windows => windows_rm_hint(name, probe),
+    };
+
+    if let Some(hint) = hint {
         eprintln!("{}", hint);
     }
 }
@@ -662,7 +661,7 @@ mod tests {
         probe.windows_session_live = true;
 
         assert_eq!(
-            rm_hint(SessionMode::Panes, "demo", &probe),
+            panes_rm_hint("demo", &probe),
             Some(
                 "'demo' is tracked in windows mode as session 'wt-demo'. Try: wt session --mode windows rm demo"
                     .to_string()
@@ -676,7 +675,7 @@ mod tests {
         probe.panes_has_worktree = true;
 
         assert_eq!(
-            rm_hint(SessionMode::Windows, "demo", &probe),
+            windows_rm_hint("demo", &probe),
             Some(
                 "'demo' is in the shared panes session. Try: wt session --mode panes rm demo"
                     .to_string()
@@ -690,7 +689,7 @@ mod tests {
         probe.worktree_exists = true;
 
         assert_eq!(
-            rm_hint(SessionMode::Windows, "demo", &probe),
+            windows_rm_hint("demo", &probe),
             Some(
                 "Worktree 'demo' exists but is not tracked in windows mode. Use 'wt rm demo' to remove the worktree or 'wt session --mode windows add demo' to add it."
                     .to_string()
@@ -704,7 +703,7 @@ mod tests {
         probe.worktree_exists = true;
 
         assert_eq!(
-            rm_hint(SessionMode::Panes, "demo", &probe),
+            panes_rm_hint("demo", &probe),
             Some(
                 "Worktree 'demo' exists but is not in the shared panes session. Use 'wt rm demo' to remove the worktree or 'wt session --mode panes add demo' to add it."
                     .to_string()
@@ -714,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_rm_hint_is_empty_when_nothing_matches() {
-        assert_eq!(rm_hint(SessionMode::Panes, "demo", &probe()), None);
-        assert_eq!(rm_hint(SessionMode::Windows, "demo", &probe()), None);
+        assert_eq!(panes_rm_hint("demo", &probe()), None);
+        assert_eq!(windows_rm_hint("demo", &probe()), None);
     }
 }
