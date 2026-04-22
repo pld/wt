@@ -11,6 +11,8 @@ use wt::tmux_manager::{AgentStatus, TmuxManager};
 use wt::worktree_manager::{check_not_in_worktree, ensure_worktrees_in_gitignore, WorktreeManager};
 
 const SESSION_NAME: &str = "wt";
+const NO_WINDOWS_SESSIONS_MSG: &str =
+    "No worktree sessions found. Use 'wt session add <name>' to create one.";
 
 #[derive(Subcommand)]
 pub(crate) enum SessionAction {
@@ -314,15 +316,9 @@ fn cmd_session_add_windows(
 }
 
 fn cmd_session_attach_windows() -> Result<()> {
-    let Some(state) = load_pruned_state()? else {
-        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+    let Some(state) = load_windows_state_or_report_empty()? else {
         return Ok(());
     };
-
-    if state.windows_sessions.is_empty() {
-        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
-        return Ok(());
-    }
 
     let entries = sorted_windows_sessions(&state);
     if !std::io::stderr().is_terminal() {
@@ -348,15 +344,9 @@ fn cmd_session_attach_windows() -> Result<()> {
 }
 
 fn cmd_session_ls_windows() -> Result<()> {
-    let Some(state) = load_pruned_state()? else {
-        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+    let Some(state) = load_windows_state_or_report_empty()? else {
         return Ok(());
     };
-
-    if state.windows_sessions.is_empty() {
-        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
-        return Ok(());
-    }
 
     for (_, info) in sorted_windows_sessions(&state) {
         let tmux = TmuxManager::new(&info.session_name);
@@ -495,13 +485,27 @@ fn persist_windows_session(
     state.save()
 }
 
-fn load_pruned_state() -> Result<Option<SessionState>> {
+fn load_windows_state() -> Result<Option<SessionState>> {
     let Some(mut state) = SessionState::load()? else {
         return Ok(None);
     };
 
     prune_windows_state(&mut state);
     save_state_or_clear_if_empty(&state)?;
+    Ok(Some(state))
+}
+
+fn load_windows_state_or_report_empty() -> Result<Option<SessionState>> {
+    let Some(state) = load_windows_state()? else {
+        eprintln!("{}", NO_WINDOWS_SESSIONS_MSG);
+        return Ok(None);
+    };
+
+    if state.windows_sessions.is_empty() {
+        eprintln!("{}", NO_WINDOWS_SESSIONS_MSG);
+        return Ok(None);
+    }
+
     Ok(Some(state))
 }
 
