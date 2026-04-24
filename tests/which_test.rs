@@ -120,6 +120,22 @@ fn test_ensure_worktrees_in_gitignore_appends_to_existing() {
 }
 
 #[test]
+fn test_ensure_worktrees_in_gitignore_adds_newline_when_missing() {
+    use wt::worktree_manager::ensure_worktrees_in_gitignore;
+
+    let repo = setup_git_repo();
+    let gitignore_path = repo.path().join(".gitignore");
+    let worktree_dir = repo.path().join(".worktrees");
+
+    fs::write(&gitignore_path, "node_modules").unwrap();
+
+    ensure_worktrees_in_gitignore(repo.path(), &worktree_dir).unwrap();
+
+    let content = fs::read_to_string(&gitignore_path).unwrap();
+    assert_eq!(content, "node_modules\n.worktrees\n");
+}
+
+#[test]
 fn test_ensure_worktrees_in_gitignore_idempotent() {
     use wt::worktree_manager::ensure_worktrees_in_gitignore;
 

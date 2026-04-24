@@ -76,6 +76,19 @@ pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> R
         if content.lines().any(|line| line.trim() == pattern) {
             return Ok(());
         }
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&gitignore_path)
+            .context("Failed to open .gitignore")?;
+
+        if !content.is_empty() && !content.ends_with('\n') {
+            file.write_all(b"\n")
+                .context("Failed to write newline to .gitignore")?;
+        }
+
+        writeln!(file, "{}", pattern).context("Failed to write to .gitignore")?;
+        return Ok(());
     }
 
     let mut file = OpenOptions::new()
