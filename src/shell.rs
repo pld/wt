@@ -125,6 +125,22 @@ if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
 elif [[ -f "$HOME/.zshrc" ]]; then
     source "$HOME/.zshrc"
 fi
+export ZDOTDIR
+
+# Safety stub: prevents `compdef: command not found` when a startup file calls
+# compdef before compinit runs. Real compdef overrides this once compinit loads.
+(( $+functions[compdef] )) || compdef() { :; }
+
+# Re-source startup files in normal order from the real ZDOTDIR/HOME, since
+# zsh's own startup sourced them from the overridden temp ZDOTDIR (empty).
+_wt_zdot="${ZDOTDIR:-$HOME}"
+[[ -f "$_wt_zdot/.zshenv" ]] && source "$_wt_zdot/.zshenv"
+if [[ -o login ]]; then
+    [[ -f "$_wt_zdot/.zprofile" ]] && source "$_wt_zdot/.zprofile"
+fi
+[[ -f "$_wt_zdot/.zshrc" ]] && source "$_wt_zdot/.zshrc"
+unset _wt_zdot
+
 # Add wt indicator to prompt
 PROMPT="(wt) $PROMPT"
 "#;
