@@ -162,6 +162,7 @@ impl WorktreeManager {
         task_id: &str,
         base_branch: &str,
         worktree_dir: &Path,
+        select_remote_branch: impl FnOnce(&[String]) -> Result<String>,
     ) -> Result<PathBuf> {
         // Sanitize for filesystem (/ -> --) but keep original for git
         let safe_name = sanitize_for_path(task_id);
@@ -171,8 +172,9 @@ impl WorktreeManager {
             anyhow::bail!("Worktree path already exists: {:?}", worktree_path);
         }
 
-        let output = if self.branch_exists(task_id) {
-            // Branch exists, just check it out
+        let mut upstream_branch: Option<String> = None;
+        let output = if self.local_branch_exists(task_id) {
+            // Local branch exists, just check it out
             Command::new("git")
                 .args(["worktree", "add"])
                 .arg(&worktree_path)
@@ -181,14 +183,38 @@ impl WorktreeManager {
                 .output()
                 .context("Failed to execute git worktree add")?
         } else {
-            // Create new branch from base
-            Command::new("git")
-                .args(["worktree", "add", "-b", task_id])
-                .arg(&worktree_path)
-                .arg(base_branch)
-                .current_dir(&self.repo_path)
-                .output()
-                .context("Failed to execute git worktree add")?
+            let remote_branches = self.remote_branch_candidates(task_id)?;
+            match remote_branches.as_slice() {
+                [] => Command::new("git")
+                    .args(["worktree", "add", "-b", task_id])
+                    .arg(&worktree_path)
+                    .arg(base_branch)
+                    .current_dir(&self.repo_path)
+                    .output()
+                    .context("Failed to execute git worktree add")?,
+                [remote_branch] => {
+                    upstream_branch = Some(remote_branch.clone());
+                    Command::new("git")
+                        .args(["worktree", "add", "-b", task_id])
+                        .arg(&worktree_path)
+                        .arg(remote_branch)
+                        .current_dir(&self.repo_path)
+                        .output()
+                        .context("Failed to execute git worktree add")?
+                }
+
+                _ => {
+                    let remote_branch = select_remote_branch(&remote_branches)?;
+                    upstream_branch = Some(remote_branch.clone());
+                    Command::new("git")
+                        .args(["worktree", "add", "-b", task_id])
+                        .arg(&worktree_path)
+                        .arg(&remote_branch)
+                        .current_dir(&self.repo_path)
+                        .output()
+                        .context("Failed to execute git worktree add")?
+                }
+            }
         };
 
         if !output.status.success() {
@@ -196,6 +222,25 @@ impl WorktreeManager {
                 "Failed to create worktree: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
+        }
+
+        if let Some(remote_branch) = upstream_branch {
+            if let Some(remote_name) = remote_branch.split('/').next() {
+                if self.remote_exists(remote_name) {
+                    let output = Command::new("git")
+                        .args(["branch", "--set-upstream-to", &remote_branch, task_id])
+                        .current_dir(&self.repo_path)
+                        .output()
+                        .context("Failed to set branch upstream")?;
+
+                    if !output.status.success() {
+                        anyhow::bail!(
+                            "Failed to set branch upstream: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                }
+            }
         }
 
         // Set up autoSetupRemote so `git push` works without -u origin HEAD
@@ -212,9 +257,54 @@ impl WorktreeManager {
         Ok(worktree_path)
     }
 
-    fn branch_exists(&self, branch: &str) -> bool {
+    fn local_branch_exists(&self, branch: &str) -> bool {
         Command::new("git")
-            .args(["rev-parse", "--verify", branch])
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{}", branch),
+            ])
+            .current_dir(&self.repo_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn remote_branch_candidates(&self, branch: &str) -> Result<Vec<String>> {
+        let output = Command::new("git")
+            .args(["for-each-ref", "--format=%(refname:short)", "refs/remotes"])
+            .current_dir(&self.repo_path)
+            .output()
+            .context("Failed to execute git for-each-ref")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to list remote branches: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let mut candidates: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|refname| !refname.is_empty() && !refname.ends_with("/HEAD"))
+            .filter(|refname| {
+                refname
+                    .rsplit_once('/')
+                    .map(|(_, leaf)| leaf == branch)
+                    .unwrap_or(false)
+            })
+            .map(str::to_string)
+            .collect();
+        candidates.sort();
+
+        Ok(candidates)
+    }
+
+    fn remote_exists(&self, remote: &str) -> bool {
+        Command::new("git")
+            .args(["config", "--get", &format!("remote.{}.url", remote)])
             .current_dir(&self.repo_path)
             .output()
             .map(|o| o.status.success())
@@ -386,7 +476,12 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         let worktree_path = manager
-            .create_worktree("test-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "test-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         assert!(worktree_path.exists());
@@ -400,10 +495,10 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         manager
-            .create_worktree("feature-1", "main", worktree_dir.path())
+            .create_worktree("feature-1", "main", worktree_dir.path(), |_| unreachable!())
             .unwrap();
         manager
-            .create_worktree("feature-2", "main", worktree_dir.path())
+            .create_worktree("feature-2", "main", worktree_dir.path(), |_| unreachable!())
             .unwrap();
 
         let worktrees = manager.list_worktrees().unwrap();
@@ -425,7 +520,12 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         let worktree_path = manager
-            .create_worktree("test-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "test-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         assert!(worktree_path.exists());
@@ -445,7 +545,12 @@ mod tests {
         assert!(!manager.worktree_exists("test-feature"));
 
         manager
-            .create_worktree("test-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "test-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         assert!(manager.worktree_exists("test-feature"));
@@ -458,7 +563,12 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         manager
-            .create_worktree("test-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "test-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         let info = manager.get_worktree_info("test-feature").unwrap();
@@ -476,10 +586,20 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         manager
-            .create_worktree("test-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "test-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
-        let result = manager.create_worktree("test-feature", "main", worktree_dir.path());
+        let result = manager.create_worktree(
+            "test-feature",
+            "main",
+            worktree_dir.path(),
+            |_| unreachable!(),
+        );
         assert!(result.is_err());
     }
 
@@ -498,8 +618,12 @@ mod tests {
         let worktree_dir = TempDir::new().unwrap();
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
-        let result =
-            manager.create_worktree("test-feature", "nonexistent-branch", worktree_dir.path());
+        let result = manager.create_worktree(
+            "test-feature",
+            "nonexistent-branch",
+            worktree_dir.path(),
+            |_| unreachable!(),
+        );
         assert!(result.is_err());
     }
 
@@ -517,7 +641,12 @@ mod tests {
 
         let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
         let worktree_path = manager
-            .create_worktree("existing-feature", "main", worktree_dir.path())
+            .create_worktree(
+                "existing-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         assert!(worktree_path.exists());
@@ -534,6 +663,98 @@ mod tests {
     }
 
     #[test]
+    fn test_create_worktree_for_remote_branch() {
+        let repo = setup_git_repo();
+        let worktree_dir = TempDir::new().unwrap();
+
+        let head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let commit = String::from_utf8_lossy(&head.stdout).trim().to_string();
+
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/remote-feature", &commit])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
+        let worktree_path = manager
+            .create_worktree(
+                "remote-feature",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
+            .unwrap();
+
+        assert!(worktree_path.exists());
+
+        let output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&worktree_path)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(branch.trim(), "remote-feature");
+    }
+
+    #[test]
+    fn test_create_worktree_prompts_for_ambiguous_remote_branch() {
+        let repo = setup_git_repo();
+        let worktree_dir = TempDir::new().unwrap();
+
+        let head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let commit = String::from_utf8_lossy(&head.stdout).trim().to_string();
+
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/shared-feature", &commit])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "update-ref",
+                "refs/remotes/upstream/shared-feature",
+                &commit,
+            ])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
+        let mut seen_candidates = Vec::new();
+        let worktree_path = manager
+            .create_worktree("shared-feature", "main", worktree_dir.path(), |remotes| {
+                seen_candidates = remotes.to_vec();
+                Ok(remotes[1].clone())
+            })
+            .unwrap();
+
+        assert_eq!(
+            seen_candidates,
+            vec![
+                "origin/shared-feature".to_string(),
+                "upstream/shared-feature".to_string(),
+            ]
+        );
+
+        let output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&worktree_path)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(branch.trim(), "shared-feature");
+    }
+
+    #[test]
     fn test_branch_name_with_slashes() {
         let repo = setup_git_repo();
         let worktree_dir = TempDir::new().unwrap();
@@ -542,7 +763,12 @@ mod tests {
 
         // Create worktree with slash in name
         let worktree_path = manager
-            .create_worktree("feature/auth", "main", worktree_dir.path())
+            .create_worktree(
+                "feature/auth",
+                "main",
+                worktree_dir.path(),
+                |_| unreachable!(),
+            )
             .unwrap();
 
         // Directory should use sanitized name (-- instead of /)

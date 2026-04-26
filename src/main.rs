@@ -183,7 +183,9 @@ fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str, print_path: bo
     let manager = WorktreeManager::new(config.root.clone())?;
     ensure_worktrees_in_gitignore(&config.root, &config.worktree_dir)?;
     std::fs::create_dir_all(&config.worktree_dir)?;
-    let path = manager.create_worktree(&name, base, &config.worktree_dir)?;
+    let path = manager.create_worktree(&name, base, &config.worktree_dir, |remotes| {
+        choose_remote_branch(&name, remotes)
+    })?;
 
     // Pop stash in the new worktree if we migrated changes
     if had_changes {
@@ -206,6 +208,24 @@ fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str, print_path: bo
         spawn_wt_shell(&path, &name, &name)?;
     }
     Ok(())
+}
+
+fn choose_remote_branch(name: &str, remotes: &[String]) -> Result<String> {
+    if remotes.is_empty() {
+        anyhow::bail!("No remote branches match '{}'.", name);
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+
+    let selection = Select::new()
+        .with_prompt(format!("Select remote branch for '{}'", name))
+        .items(remotes)
+        .default(0)
+        .interact()?;
+
+    Ok(remotes[selection].clone())
 }
 
 fn migrate_from_current_branch(repo_path: &Path, root_branch: &str) -> Result<bool> {

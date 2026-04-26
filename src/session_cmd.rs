@@ -147,9 +147,29 @@ fn ensure_worktree_path(
         }
         None => {
             eprintln!("Creating worktree: {}", name);
-            manager.create_worktree(name, base, &context.repo.worktree_dir)
+            manager.create_worktree(name, base, &context.repo.worktree_dir, |remotes| {
+                choose_remote_branch(name, remotes)
+            })
         }
     }
+}
+
+fn choose_remote_branch(name: &str, remotes: &[String]) -> Result<String> {
+    if remotes.is_empty() {
+        anyhow::bail!("No remote branches match '{}'.", name);
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+
+    let selection = Select::new()
+        .with_prompt(format!("Select remote branch for '{}'", name))
+        .items(remotes)
+        .default(0)
+        .interact()?;
+
+    Ok(remotes[selection].clone())
 }
 
 fn panes_tmux() -> TmuxManager {
