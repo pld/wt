@@ -134,6 +134,23 @@ wt session [--mode M] rm <name>
 wt session [--mode M] watch [-i N]
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
 
+wt new [<name>]                     Create workspace and enter it, name defaults to current branch
+     [-b <base>]                    Defaults to main
+     [--print-path]                 Output path only (for scripts)
+wt use <name>                       Enter existing workspace
+wt ls                               Interactive workspace picker
+wt rm <name>                        Remove workspace (interactive if no name)
+wt which                            Print current workspace name
+wt session [--mode M]               Enter tmux session(s) (see Session Mode)
+wt session [--mode M] ls            List workspaces in session
+wt session [--mode M] add <name>    Add a named session
+     [-b <base>]                    Defaults to main
+     [--panes 2|3]                  Override pane count (panes mode) / window count (windows mode)
+     [--watch]                      Add status window with live agent status (panes mode only)
+wt session [--mode M] rm <name>     Remove a named session
+wt session [--mode M] watch [-i N]  Watch all the sessions
+wt -d <dir> <cmd>                   Custom worktree directory (default: .worktrees)
+
 M = panes | windows
 ```
 
