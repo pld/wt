@@ -82,71 +82,65 @@ fn spawn_fish(shell_path: &str, wt_path: &Path, wt_name: &str, branch: &str) -> 
 fn create_zsh_wrapper() -> Result<PathBuf> {
     let temp_dir = std::env::temp_dir().join(format!("wt-zsh-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)?;
+    let functions_dir = temp_dir.join("functions");
+    std::fs::create_dir_all(&functions_dir)?;
 
-    // Create .zshenv to handle compdef before compinit
+    // zsh reads `.zshenv` before `.zshrc`, so this is the earliest safe place
+    // to restore the real dotdir and install the completion shim.
     let zshenv_content = r#"# Pre-compinit compdef stub to prevent "command not found" errors
-# This queues compdef calls until compinit runs
-if ! type compdef &>/dev/null; then
-    typeset -a _wt_compdef_queue
-    _wt_compdef_queue=()
-    function compdef {
-        _wt_compdef_queue+=("${(j: :)${(q)@}}")
-    }
-    # Hook compinit to replay queued compdef calls
-    function _wt_replay_compdef {
-        unfunction compdef 2>/dev/null
-        autoload -Uz compdef
-        for cmd in "${_wt_compdef_queue[@]}"; do
-            eval "compdef $cmd"
-        done
-        unset _wt_compdef_queue
-        unfunction _wt_replay_compdef
-    }
-    # Wrap compinit to replay after it runs
-    function compinit {
-        unfunction compinit
-        autoload -Uz compinit
-        compinit "$@"
-        _wt_replay_compdef
-    }
+# Make the temp functions directory visible before the real startup files load.
+fpath=("$ZDOTDIR/functions" $fpath)
+
+# Restore the original dotdir before zsh loads the rest of the startup chain.
+if [[ -n "$_WT_ORIG_ZDOTDIR" ]]; then
+    export ZDOTDIR="$_WT_ORIG_ZDOTDIR"
 fi
 
-# Source user's zshenv
-if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshenv" ]]; then
-    source "$_WT_ORIG_ZDOTDIR/.zshenv"
-elif [[ -f "$HOME/.zshenv" ]]; then
-    source "$HOME/.zshenv"
-fi
+# Hook compinit to replay queued compdef calls.
+function _wt_replay_compdef {
+    unfunction compdef 2>/dev/null
+    autoload -Uz compdef
+    typeset -a _wt_compdef_queue
+    for cmd in "${_wt_compdef_queue[@]}"; do
+        eval "compdef $cmd"
+    done
+    unset _wt_compdef_queue
+    unfunction _wt_replay_compdef
+    _wt_install_prompt_prefix
+}
+
+function _wt_apply_prompt_prefix {
+    [[ $PROMPT == \(wt\)* ]] || PROMPT="(wt) $PROMPT"
+}
+
+function _wt_install_prompt_prefix {
+    typeset -ga precmd_functions
+    precmd_functions=(${precmd_functions:#_wt_apply_prompt_prefix})
+    # `precmd` runs after framework prompt setup, so this preserves the theme.
+    precmd_functions+=(_wt_apply_prompt_prefix)
+}
+
+# Wrap compinit to replay after it runs.
+function compinit {
+    unfunction compinit
+    autoload -Uz compinit
+    compinit "$@"
+    _wt_replay_compdef
+}
+
+_wt_install_prompt_prefix
 "#;
 
-    let zshrc_content = r#"# Source user's zshrc
-if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
-    source "$_WT_ORIG_ZDOTDIR/.zshrc"
-elif [[ -f "$HOME/.zshrc" ]]; then
-    source "$HOME/.zshrc"
-fi
-export ZDOTDIR
+    let compdef_content = r#"# Pre-compinit compdef stub to prevent "command not found" errors.
+typeset -ga _wt_compdef_queue
 
-# Safety stub: prevents `compdef: command not found` when a startup file calls
-# compdef before compinit runs. Real compdef overrides this once compinit loads.
-(( $+functions[compdef] )) || compdef() { :; }
-
-# Re-source startup files in normal order from the real ZDOTDIR/HOME, since
-# zsh's own startup sourced them from the overridden temp ZDOTDIR (empty).
-_wt_zdot="${ZDOTDIR:-$HOME}"
-[[ -f "$_wt_zdot/.zshenv" ]] && source "$_wt_zdot/.zshenv"
-if [[ -o login ]]; then
-    [[ -f "$_wt_zdot/.zprofile" ]] && source "$_wt_zdot/.zprofile"
-fi
-[[ -f "$_wt_zdot/.zshrc" ]] && source "$_wt_zdot/.zshrc"
-unset _wt_zdot
-
-# Add wt indicator to prompt
-PROMPT="(wt) $PROMPT"
+compdef() {
+    _wt_compdef_queue+=("${(j: :)${(q)@}}")
+}
 "#;
 
     std::fs::write(temp_dir.join(".zshenv"), zshenv_content)?;
-    std::fs::write(temp_dir.join(".zshrc"), zshrc_content)?;
+    std::fs::write(functions_dir.join("compdef"), compdef_content)?;
     Ok(temp_dir)
 }
 
@@ -168,4 +162,75 @@ fn show_exit_status(wt_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_zsh_wrapper;
+    use std::fs;
+    use std::process::Command;
+
+    fn zsh_available() -> bool {
+        Command::new("zsh")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn zsh_wrapper_sources_startup_files_from_original_dotdir() {
+        let temp_dir = create_zsh_wrapper().expect("create zsh wrapper");
+        let zshenv = std::fs::read_to_string(temp_dir.join(".zshenv")).expect("read zshenv");
+
+        assert!(zshenv.contains("export ZDOTDIR=\"$_WT_ORIG_ZDOTDIR\""));
+        assert!(zshenv.contains("fpath=(\"$ZDOTDIR/functions\" $fpath)"));
+        assert!(temp_dir.join("functions").join("compdef").exists());
+        assert!(!temp_dir.join(".zshrc").exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn zsh_wrapper_boots_framework_like_startup_without_compdef_errors() {
+        if !zsh_available() {
+            return;
+        }
+
+        let home_dir = tempfile::TempDir::new().expect("create fake home");
+        fs::write(
+            home_dir.path().join(".zshrc"),
+            r#"autoload -Uz compinit
+compdef _git git
+compinit
+PROMPT="demo ❯❯❯ "
+"#,
+        )
+        .expect("write fake zshrc");
+
+        let wrapper_dir = create_zsh_wrapper().expect("create zsh wrapper");
+
+        let output = Command::new("zsh")
+            .arg("-ic")
+            .arg("print -r -- \"${(j:,:)precmd_functions}\"; _wt_apply_prompt_prefix; print -r -- \"$PROMPT\"")
+            .env("HOME", home_dir.path())
+            .env("ZDOTDIR", &wrapper_dir)
+            .env("_WT_ORIG_ZDOTDIR", home_dir.path())
+            .output()
+            .expect("run zsh startup");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "zsh startup failed: {}", stderr);
+        assert!(
+            !stderr.contains("compdef:"),
+            "unexpected compdef error output: {}",
+            stderr
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("_wt_apply_prompt_prefix"));
+        assert!(stdout.contains("(wt) demo ❯❯❯ "));
+
+        let _ = fs::remove_dir_all(wrapper_dir);
+    }
 }
