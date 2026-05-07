@@ -129,6 +129,7 @@ wt session [--mode M] ls  List workspaces in session
 wt session [--mode M] add <name>
       [-b base]           base: defaults to main
       [--panes 2|3]       override pane count (panes mode) / window count (windows mode)
+      [--agent-cmd <cmd>] override agent command for this invocation
       [--watch]           add status window with live agent status (panes mode only)
 wt session [--mode M] rm <name>
 wt session [--mode M] watch [-i N]
@@ -146,6 +147,7 @@ wt session [--mode M] ls            List workspaces in session
 wt session [--mode M] add <name>    Add a named session
      [-b <base>]                    Defaults to main
      [--panes 2|3]                  Override pane count (panes mode) / window count (windows mode)
+     [--agent-cmd <cmd>]            Override agent command for this invocation
      [--watch]                      Add status window with live agent status (panes mode only)
 wt session [--mode M] rm <name>     Remove a named session
 wt session [--mode M] watch [-i N]  Watch all the sessions
@@ -162,6 +164,7 @@ Manage multiple workspaces in tmux with dedicated agent, terminal, and optional 
 # Add workspaces to session
 $ wt session add feature/auth
 $ wt session add feature/payments
+$ wt session add feature/review --agent-cmd "aider --fast"
 
 # List workspaces with agent status
 $ wt session ls
@@ -249,6 +252,12 @@ does not cause `wt` to pick up unrelated tmux sessions.
 
 `wt session watch` and `--watch` are currently panes-mode only.
 
+`--agent-cmd` is a one-off override for `session.agent_cmd` and only affects the
+`wt session add` invocation it is passed to. It does not update config, and it
+only applies when creating a new panes-mode window or windows-mode session.
+Re-running `wt session add` against an existing tmux target keeps that target's
+current command.
+
 ### Configuration
 
 Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
@@ -262,7 +271,7 @@ agent_cmd = "claude"   # command for agent pane/window
 editor_cmd = "nvim"    # command for editor pane/window (when panes=3)
 ```
 
-Precedence: `--mode` / `--panes` flags > `.wt.toml` > `~/.wt/config.toml` > defaults
+Precedence: `--mode` / `--panes` / `--agent-cmd` flags > `.wt.toml` > `~/.wt/config.toml` > defaults
 
 ### Navigation
 
