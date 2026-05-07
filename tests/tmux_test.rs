@@ -17,6 +17,18 @@ fn setup_test_repo() -> (TempDir, PathBuf) {
         .expect("Failed to init git repo");
 
     Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to set git user.email");
+
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to set git user.name");
+
+    Command::new("git")
         .args(["commit", "--allow-empty", "-m", "init"])
         .current_dir(&repo_path)
         .output()
