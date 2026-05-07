@@ -28,6 +28,9 @@ pub(crate) enum SessionAction {
         /// Override pane count (2 or 3)
         #[arg(long)]
         panes: Option<u8>,
+        /// Override agent command for this invocation when creating the agent pane/window
+        #[arg(long, value_name = "CMD")]
+        agent_cmd: Option<String>,
         /// Create status window with live agent status
         #[arg(long)]
         watch: bool,
@@ -71,6 +74,15 @@ impl<'a> SessionCmdContext<'a> {
     fn effective_panes(&self, panes_override: Option<u8>) -> u8 {
         self.config.effective_panes(panes_override)
     }
+
+    fn effective_session_config(
+        &self,
+        agent_cmd_override: Option<&str>,
+    ) -> wt::config::SessionConfig {
+        self.config
+            .session
+            .with_agent_cmd_override(agent_cmd_override)
+    }
 }
 
 pub(crate) fn run_session(
@@ -104,10 +116,15 @@ pub(crate) fn run_session(
             name,
             base,
             panes,
+            agent_cmd,
             watch,
         }) => match context.mode {
-            SessionMode::Panes => cmd_session_add_panes(&context, &name, &base, panes, watch),
-            SessionMode::Windows => cmd_session_add_windows(&context, &name, &base, panes, watch),
+            SessionMode::Panes => {
+                cmd_session_add_panes(&context, &name, &base, panes, agent_cmd.as_deref(), watch)
+            }
+            SessionMode::Windows => {
+                cmd_session_add_windows(&context, &name, &base, panes, agent_cmd.as_deref(), watch)
+            }
         },
         Some(SessionAction::Rm { name }) => match context.mode {
             SessionMode::Panes => cmd_session_rm_panes(&context, &name),
@@ -242,12 +259,18 @@ fn cmd_session_add_panes(
     name: &str,
     base: &str,
     panes_override: Option<u8>,
+    agent_cmd_override: Option<&str>,
     watch: bool,
 ) -> Result<()> {
     let tmux = panes_tmux();
     let worktree_path = ensure_worktree_path(context, name, base)?;
     let panes = context.effective_panes(panes_override);
+    let session_config = context.effective_session_config(agent_cmd_override);
     let inside_session = tmux.is_inside_session();
+
+    if let Some(agent_cmd) = agent_cmd_override {
+        eprintln!("Using one-off agent command override: {}", agent_cmd);
+    }
 
     if !tmux.session_exists()? {
         eprintln!("Creating tmux session: {}", SESSION_NAME);
@@ -257,7 +280,7 @@ fn cmd_session_add_panes(
         } else {
             tmux.create_session(name, &worktree_path)?;
         }
-        tmux.setup_worktree_layout(name, &worktree_path, panes, &context.config.session)?;
+        tmux.setup_worktree_layout(name, &worktree_path, panes, &session_config)?;
     } else {
         if watch {
             ensure_status_window(&tmux, &context.repo.root)?;
@@ -267,13 +290,18 @@ fn cmd_session_add_panes(
 
         if windows.iter().any(|window| window.name == name) {
             eprintln!("Window '{}' already exists in session.", name);
+            if agent_cmd_override.is_some() {
+                eprintln!(
+                    "Note: --agent-cmd only applies when creating a new agent pane; existing windows keep their current command."
+                );
+            }
             if inside_session {
                 tmux.select_window(name)?;
             }
         } else {
             eprintln!("Adding window: {} ({} panes)", name, panes);
             tmux.create_window(name, &worktree_path)?;
-            tmux.setup_worktree_layout(name, &worktree_path, panes, &context.config.session)?;
+            tmux.setup_worktree_layout(name, &worktree_path, panes, &session_config)?;
         }
     }
 
@@ -339,6 +367,7 @@ fn cmd_session_add_windows(
     name: &str,
     base: &str,
     panes_override: Option<u8>,
+    agent_cmd_override: Option<&str>,
     watch: bool,
 ) -> Result<()> {
     if watch {
@@ -347,18 +376,28 @@ fn cmd_session_add_windows(
 
     let worktree_path = ensure_worktree_path(context, name, base)?;
     let panes = context.effective_panes(panes_override);
-    let session_name = context.config.session.session_name_for(name);
+    let session_config = context.effective_session_config(agent_cmd_override);
+    let session_name = session_config.session_name_for(name);
     let tmux = TmuxManager::new(&session_name);
+
+    if let Some(agent_cmd) = agent_cmd_override {
+        eprintln!("Using one-off agent command override: {}", agent_cmd);
+    }
 
     if tmux.session_exists()? {
         eprintln!("Using existing session: {}", session_name);
+        if agent_cmd_override.is_some() {
+            eprintln!(
+                "Note: --agent-cmd only applies when creating a new agent window; existing sessions keep their current command."
+            );
+        }
     } else {
         eprintln!(
             "Creating tmux session: {} ({} windows)",
             session_name, panes
         );
         tmux.create_session("agent", &worktree_path)?;
-        tmux.setup_worktree_windows(&worktree_path, panes, &context.config.session)?;
+        tmux.setup_worktree_windows(&worktree_path, panes, &session_config)?;
     }
 
     persist_windows_session(name, &session_name, &worktree_path, panes)?;
@@ -671,6 +710,7 @@ fn print_rm_hint(mode: SessionMode, name: &str, probe: &SessionRmProbe) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wt::config::Config;
 
     fn probe() -> SessionRmProbe {
         SessionRmProbe {
@@ -740,6 +780,68 @@ mod tests {
     fn test_rm_hint_is_empty_when_nothing_matches() {
         assert_eq!(panes_rm_hint("demo", &probe()), None);
         assert_eq!(windows_rm_hint("demo", &probe()), None);
+    }
+
+    #[test]
+    fn test_effective_session_config_uses_agent_cmd_override() {
+        let mut config = Config::default();
+        config.session.agent_cmd = "claude --resume".to_string();
+        config.session.editor_cmd = "hx".to_string();
+
+        let context = SessionCmdContext {
+            repo: &crate::RepoConfig {
+                root: std::path::PathBuf::from("/tmp/repo"),
+                worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
+            },
+            config,
+            mode: SessionMode::Panes,
+        };
+
+        let effective = context.effective_session_config(Some("aider --fast"));
+
+        assert_eq!(effective.agent_cmd, "aider --fast");
+        assert_eq!(effective.editor_cmd, "hx");
+    }
+
+    #[test]
+    fn test_effective_session_config_override_is_one_off() {
+        let mut config = Config::default();
+        config.session.agent_cmd = "claude --resume".to_string();
+        config.session.editor_cmd = "hx".to_string();
+
+        let original_agent_cmd = config.session.agent_cmd.clone();
+        let context = SessionCmdContext {
+            repo: &crate::RepoConfig {
+                root: std::path::PathBuf::from("/tmp/repo"),
+                worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
+            },
+            config,
+            mode: SessionMode::Windows,
+        };
+
+        let effective = context.effective_session_config(Some("aider --fast"));
+
+        assert_eq!(effective.agent_cmd, "aider --fast");
+        assert_eq!(context.config.session.agent_cmd, original_agent_cmd);
+    }
+
+    #[test]
+    fn test_effective_session_config_uses_loaded_value_when_no_override() {
+        let mut config = Config::default();
+        config.session.agent_cmd = "opencode".to_string();
+
+        let context = SessionCmdContext {
+            repo: &crate::RepoConfig {
+                root: std::path::PathBuf::from("/tmp/repo"),
+                worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
+            },
+            config,
+            mode: SessionMode::Windows,
+        };
+
+        let effective = context.effective_session_config(None);
+
+        assert_eq!(effective.agent_cmd, "opencode");
     }
 
     #[test]
