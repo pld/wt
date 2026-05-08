@@ -254,6 +254,21 @@ fn cmd_session_ls(tmux: &TmuxManager) -> Result<()> {
     Ok(())
 }
 
+fn note_agent_cmd_override(agent_cmd: Option<&str>) {
+    if let Some(cmd) = agent_cmd {
+        eprintln!("Using one-off agent command override: {}", cmd);
+    }
+}
+
+fn note_agent_cmd_ignored(agent_cmd: Option<&str>, creating: &str, existing: &str) {
+    if agent_cmd.is_some() {
+        eprintln!(
+            "Note: --agent-cmd only applies when creating a new {}; existing {} keep their current command.",
+            creating, existing
+        );
+    }
+}
+
 fn cmd_session_add_panes(
     context: &SessionCmdContext<'_>,
     name: &str,
@@ -268,9 +283,7 @@ fn cmd_session_add_panes(
     let session_config = context.effective_session_config(agent_cmd_override);
     let inside_session = tmux.is_inside_session();
 
-    if let Some(agent_cmd) = agent_cmd_override {
-        eprintln!("Using one-off agent command override: {}", agent_cmd);
-    }
+    note_agent_cmd_override(agent_cmd_override);
 
     if !tmux.session_exists()? {
         eprintln!("Creating tmux session: {}", SESSION_NAME);
@@ -290,11 +303,7 @@ fn cmd_session_add_panes(
 
         if windows.iter().any(|window| window.name == name) {
             eprintln!("Window '{}' already exists in session.", name);
-            if agent_cmd_override.is_some() {
-                eprintln!(
-                    "Note: --agent-cmd only applies when creating a new agent pane; existing windows keep their current command."
-                );
-            }
+            note_agent_cmd_ignored(agent_cmd_override, "agent pane", "windows");
             if inside_session {
                 tmux.select_window(name)?;
             }
@@ -380,17 +389,11 @@ fn cmd_session_add_windows(
     let session_name = session_config.session_name_for(name);
     let tmux = TmuxManager::new(&session_name);
 
-    if let Some(agent_cmd) = agent_cmd_override {
-        eprintln!("Using one-off agent command override: {}", agent_cmd);
-    }
+    note_agent_cmd_override(agent_cmd_override);
 
     if tmux.session_exists()? {
         eprintln!("Using existing session: {}", session_name);
-        if agent_cmd_override.is_some() {
-            eprintln!(
-                "Note: --agent-cmd only applies when creating a new agent window; existing sessions keep their current command."
-            );
-        }
+        note_agent_cmd_ignored(agent_cmd_override, "agent window", "sessions");
     } else {
         eprintln!(
             "Creating tmux session: {} ({} windows)",
