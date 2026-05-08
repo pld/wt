@@ -66,6 +66,16 @@ impl SessionConfig {
     pub fn session_name_for(&self, worktree: &str) -> String {
         format!("{}{}", self.session_prefix, worktree)
     }
+
+    /// Return a copy of the session config with a one-off agent command
+    /// override applied.
+    pub fn with_agent_cmd_override(&self, agent_cmd_override: Option<&str>) -> Self {
+        let mut config = self.clone();
+        if let Some(agent_cmd) = agent_cmd_override {
+            config.agent_cmd = agent_cmd.to_string();
+        }
+        config
+    }
 }
 
 impl Config {
@@ -210,6 +220,39 @@ panes = 3
         assert_eq!(config.session.panes, 3);
         assert_eq!(config.session.agent_cmd, "claude");
         assert_eq!(config.session.editor_cmd, "nvim");
+    }
+
+    #[test]
+    fn test_with_agent_cmd_override_uses_override_when_present() {
+        let config = SessionConfig::default();
+
+        let effective = config.with_agent_cmd_override(Some("aider --fast"));
+
+        assert_eq!(effective.agent_cmd, "aider --fast");
+        assert_eq!(effective.editor_cmd, config.editor_cmd);
+        assert_eq!(effective.session_prefix, config.session_prefix);
+    }
+
+    #[test]
+    fn test_with_agent_cmd_override_trims_nothing_and_does_not_mutate_original() {
+        let mut config = SessionConfig::default();
+        config.agent_cmd = "claude --resume".to_string();
+
+        let effective = config.with_agent_cmd_override(Some("aider --fast --model sonnet"));
+
+        assert_eq!(effective.agent_cmd, "aider --fast --model sonnet");
+        assert_eq!(config.agent_cmd, "claude --resume");
+    }
+
+    #[test]
+    fn test_with_agent_cmd_override_preserves_config_when_absent() {
+        let config = SessionConfig::default();
+
+        let effective = config.with_agent_cmd_override(None);
+
+        assert_eq!(effective.agent_cmd, config.agent_cmd);
+        assert_eq!(effective.editor_cmd, config.editor_cmd);
+        assert_eq!(effective.session_prefix, config.session_prefix);
     }
 
     #[test]
@@ -390,6 +433,65 @@ panes = 3
         let config = Config::load_layered(Some(&global), Some(&local));
         assert_eq!(config.session.panes, 3);
         assert_eq!(config.session.agent_cmd, "aider");
+    }
+
+    #[test]
+    fn test_load_layered_local_agent_cmd_overrides_global_agent_cmd() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let local = dir.path().join("local.toml");
+
+        writeln!(
+            std::fs::File::create(&global).unwrap(),
+            "[session]\nagent_cmd = \"claude --resume\"\npanes = 2\n"
+        )
+        .unwrap();
+        writeln!(
+            std::fs::File::create(&local).unwrap(),
+            "[session]\nagent_cmd = \"aider --fast\"\n"
+        )
+        .unwrap();
+
+        let config = Config::load_layered(Some(&global), Some(&local));
+        assert_eq!(config.session.agent_cmd, "aider --fast");
+        assert_eq!(config.session.panes, 2);
+    }
+
+    #[test]
+    fn test_full_precedence_chain_cli_beats_local_beats_global_beats_default() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let local = dir.path().join("local.toml");
+
+        writeln!(
+            std::fs::File::create(&global).unwrap(),
+            "[session]\nagent_cmd = \"opencode\"\n"
+        )
+        .unwrap();
+        writeln!(
+            std::fs::File::create(&local).unwrap(),
+            "[session]\nagent_cmd = \"claude --resume\"\n"
+        )
+        .unwrap();
+
+        let loaded = Config::load_layered(Some(&global), Some(&local));
+        assert_eq!(loaded.session.agent_cmd, "claude --resume");
+
+        let with_override = loaded.session.with_agent_cmd_override(Some("aider --fast"));
+        assert_eq!(with_override.agent_cmd, "aider --fast");
+
+        let without_override = loaded.session.with_agent_cmd_override(None);
+        assert_eq!(without_override.agent_cmd, "claude --resume");
+
+        let global_only = Config::load_layered(Some(&global), None);
+        assert_eq!(global_only.session.agent_cmd, "opencode");
+
+        let no_files = Config::load_layered(None, None);
+        assert_eq!(no_files.session.agent_cmd, default_agent_cmd());
     }
 
     #[test]

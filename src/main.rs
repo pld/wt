@@ -424,3 +424,61 @@ fn cmd_use(config: &RepoConfig, name: Option<String>) -> Result<()> {
     spawn_wt_shell(&wt_info.path, &wt_info.task_id, &wt_info.branch)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_session_add_without_agent_cmd_leaves_override_unset() {
+        let cli = Cli::try_parse_from(["wt", "session", "add", "demo"])
+            .expect("session add should parse without --agent-cmd");
+
+        match cli.command {
+            Commands::Session {
+                action: Some(SessionAction::Add { agent_cmd, .. }),
+                ..
+            } => {
+                assert_eq!(agent_cmd, None);
+            }
+            _ => panic!("expected session add command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_session_add_agent_cmd() {
+        let cli = Cli::try_parse_from([
+            "wt",
+            "session",
+            "--mode",
+            "windows",
+            "add",
+            "demo",
+            "--agent-cmd",
+            "aider --fast",
+        ])
+        .expect("session add should accept --agent-cmd");
+
+        match cli.command {
+            Commands::Session {
+                mode,
+                action:
+                    Some(SessionAction::Add {
+                        name,
+                        base,
+                        panes,
+                        agent_cmd,
+                        watch,
+                    }),
+            } => {
+                assert_eq!(mode, Some(SessionMode::Windows));
+                assert_eq!(name, "demo");
+                assert_eq!(base, "main");
+                assert_eq!(panes, None);
+                assert_eq!(agent_cmd.as_deref(), Some("aider --fast"));
+                assert!(!watch);
+            }
+            _ => panic!("expected session add command"),
+        }
+    }
+}
