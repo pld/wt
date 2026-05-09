@@ -169,7 +169,22 @@ impl WorktreeManager {
         let worktree_path = worktree_dir.join(&safe_name);
 
         if worktree_path.exists() {
-            anyhow::bail!("Worktree path already exists: {:?}", worktree_path);
+            let registered = self
+                .list_worktrees()?
+                .into_iter()
+                .any(|w| w.path == worktree_path);
+            if registered {
+                anyhow::bail!(
+                    "Worktree '{}' is already registered at {:?}",
+                    task_id,
+                    worktree_path
+                );
+            }
+            anyhow::bail!(
+                "Path {:?} exists but is not a registered worktree.\n\
+                 Run 'git worktree prune' or remove the directory before retrying.",
+                worktree_path
+            );
         }
 
         let mut upstream_branch: Option<String> = None;
@@ -601,6 +616,10 @@ mod tests {
             |_| unreachable!(),
         );
         assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already registered"));
     }
 
     #[test]
