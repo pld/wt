@@ -172,6 +172,22 @@ fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str, print_path: bo
         }
     };
 
+    let manager = WorktreeManager::new(config.root.clone())?;
+
+    if let Some(info) = manager.get_worktree_info(&name)? {
+        eprintln!(
+            "Worktree '{}' already exists at {}, entering it.",
+            name,
+            info.path.display()
+        );
+        if print_path {
+            println!("{}", info.path.display());
+        } else {
+            spawn_wt_shell(&info.path, &info.task_id, &info.branch)?;
+        }
+        return Ok(());
+    }
+
     // If creating worktree for currently checked out branch, migrate the work
     let migrating = name == current_branch && current_branch != root_branch;
     let had_changes = if migrating {
@@ -180,7 +196,6 @@ fn cmd_new(config: &RepoConfig, name: Option<String>, base: &str, print_path: bo
         false
     };
 
-    let manager = WorktreeManager::new(config.root.clone())?;
     ensure_worktrees_in_gitignore(&config.root, &config.worktree_dir)?;
     std::fs::create_dir_all(&config.worktree_dir)?;
     let path = manager.create_worktree(&name, base, &config.worktree_dir, |remotes| {
