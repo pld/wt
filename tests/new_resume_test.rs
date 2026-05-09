@@ -47,9 +47,12 @@ fn test_create_worktree_fresh_succeeds() {
     let worktree_dir = TempDir::new().unwrap();
 
     let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
-    let result = manager.create_worktree("fresh-feature", "main", worktree_dir.path(), |_| {
-        unreachable!()
-    });
+    let result = manager.create_worktree(
+        "fresh-feature",
+        "main",
+        worktree_dir.path(),
+        |_| unreachable!(),
+    );
 
     assert!(result.is_ok(), "fresh create should succeed: {:?}", result);
     let path = result.unwrap();
@@ -64,14 +67,20 @@ fn test_create_worktree_already_registered_errors_at_manager_layer() {
 
     let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
     manager
-        .create_worktree("dup-feature", "main", worktree_dir.path(), |_| {
-            unreachable!()
-        })
+        .create_worktree(
+            "dup-feature",
+            "main",
+            worktree_dir.path(),
+            |_| unreachable!(),
+        )
         .unwrap();
 
-    let result = manager.create_worktree("dup-feature", "main", worktree_dir.path(), |_| {
-        unreachable!()
-    });
+    let result = manager.create_worktree(
+        "dup-feature",
+        "main",
+        worktree_dir.path(),
+        |_| unreachable!(),
+    );
 
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -88,9 +97,12 @@ fn test_create_worktree_orphan_directory_errors() {
 
     let manager = WorktreeManager::new(repo.path().to_path_buf()).unwrap();
     let path = manager
-        .create_worktree("orphan-feature", "main", worktree_dir.path(), |_| {
-            unreachable!()
-        })
+        .create_worktree(
+            "orphan-feature",
+            "main",
+            worktree_dir.path(),
+            |_| unreachable!(),
+        )
         .unwrap();
 
     // Deregister from git but leave the directory on disk
@@ -105,9 +117,12 @@ fn test_create_worktree_orphan_directory_errors() {
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(&marker, "precious work").unwrap();
 
-    let result = manager.create_worktree("orphan-feature", "main", worktree_dir.path(), |_| {
-        unreachable!()
-    });
+    let result = manager.create_worktree(
+        "orphan-feature",
+        "main",
+        worktree_dir.path(),
+        |_| unreachable!(),
+    );
 
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -116,8 +131,8 @@ fn test_create_worktree_orphan_directory_errors() {
         "expected actionable error, got: {msg}"
     );
     assert!(
-        msg.contains("git worktree prune"),
-        "expected prune hint in error: {msg}"
+        msg.contains("Remove the directory"),
+        "expected removal hint in error: {msg}"
     );
     // Directory must not be deleted
     assert!(marker.exists(), "orphan directory must not be auto-cleaned");
