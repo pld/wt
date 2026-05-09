@@ -46,7 +46,9 @@ curl -s -H "Shortcut-Token: $SHORTCUT_API_TOKEN" \
 wt new <branch-name> --print-path
 ```
 
-This prints the worktree path. Capture it.
+This prints the worktree path. Capture it. Re-running this command for an
+already-created worktree is safe — it prints the existing path and exits 0
+without spawning a shell or creating a stash.
 
 ### 4. Set working context
 

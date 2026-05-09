@@ -62,6 +62,19 @@ Entering worktree: feature/payments
 (wt) $          # Your changes are here
 ```
 
+Re-running `wt new <name>` for an existing worktree drops you back into it —
+no error, no stash:
+
+```bash
+$ wt new feature/auth
+Worktree 'feature/auth' already exists at /…/.worktrees/feature--auth, entering it.
+(wt) $
+```
+
+If a directory exists under `.worktrees/` but is not registered with git
+(e.g. after a partial `wt rm`), `wt new` exits with an actionable error and
+leaves the directory untouched.
+
 ### Switch workspaces
 
 ```bash
