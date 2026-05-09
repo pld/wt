@@ -182,7 +182,7 @@ impl WorktreeManager {
             }
             anyhow::bail!(
                 "Path {:?} exists but is not a registered worktree.\n\
-                 Run 'git worktree prune' or remove the directory before retrying.",
+                 Remove the directory before retrying.",
                 worktree_path
             );
         }
