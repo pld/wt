@@ -28,13 +28,22 @@ Git worktrees solve this—but the commands are verbose, cleanup is manual, and 
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pld/wt/main/install.sh | bash -s -- --from-release && exec $SHELL
+curl -fsSL https://raw.githubusercontent.com/pld/wt/main/install.sh | bash -s -- --from-release
 ```
 
 Or build from source:
 ```bash
 git clone https://github.com/pld/wt.git && cd wt && ./install.sh
 ```
+
+The binary is installed to `~/.local/bin/wt`, which is on `PATH` by default on modern Linux. On macOS, if `~/.local/bin` is not yet on your `PATH`, the installer will print a one-line instruction.
+
+For a system-wide install (requires `sudo`):
+```bash
+./install.sh --system   # installs to /usr/local/bin/wt
+```
+
+**Migrating from an older install**: re-running the installer automatically moves `~/.wt/config.toml` → `~/.config/wt/config.toml`, `~/.wt/sessions.json` → `~/.local/state/wt/sessions.json`, removes the legacy binary and the shell alias that the old installer added. Until you re-run the installer, `wt` will still read from the legacy locations (with a one-line notice on stderr).
 
 ## Usage
 
@@ -256,9 +265,9 @@ Session names default to `wt-<worktree>` and are configurable with
 `session_prefix`.
 
 Discovery in windows mode is state-backed: `wt` records sessions created via
-`wt session add` in `~/.wt/sessions.json`, and `wt session`, `wt session ls`, and
-`wt session rm` operate from that stored state. Stale entries are pruned when the
-corresponding tmux session no longer exists.
+`wt session add` in `~/.local/state/wt/sessions.json` (respects `$XDG_STATE_HOME`),
+and `wt session`, `wt session ls`, and `wt session rm` operate from that stored
+state. Stale entries are pruned when the corresponding tmux session no longer exists.
 
 Because discovery is state-backed, `session_prefix = ""` only changes naming. It
 does not cause `wt` to pick up unrelated tmux sessions.
@@ -273,7 +282,7 @@ current command.
 
 ### Configuration
 
-Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
+Create `~/.config/wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings. The global path respects `$XDG_CONFIG_HOME` (default `~/.config`):
 
 ```toml
 [session]
@@ -284,7 +293,9 @@ agent_cmd = "claude"   # command for agent pane/window
 editor_cmd = "nvim"    # command for editor pane/window (when panes=3)
 ```
 
-Precedence: `--mode` / `--panes` / `--agent-cmd` flags > `.wt.toml` > `~/.wt/config.toml` > defaults
+Precedence: `--mode` / `--panes` / `--agent-cmd` flags > `.wt.toml` > `~/.config/wt/config.toml` > defaults
+
+The legacy `~/.wt/config.toml` is still read as a fallback (with a one-line notice) until you rerun the installer to migrate.
 
 ### Navigation
 

@@ -1,19 +1,40 @@
 #!/bin/bash
 set -e
 
-INSTALL_DIR="$HOME/.wt"
-BIN_PATH="$INSTALL_DIR/wt"
+# Determine install directory
+SYSTEM_INSTALL=false
+FROM_RELEASE=false
+for arg in "$@"; do
+    case "$arg" in
+        --system) SYSTEM_INSTALL=true ;;
+        --from-release) FROM_RELEASE=true ;;
+    esac
+done
 
-echo "Installing wt..."
-
-mkdir -p "$INSTALL_DIR"
-
-if [ -f "$BIN_PATH" ]; then
-    echo "Removing existing installation..."
-    rm "$BIN_PATH"
+if [ "$SYSTEM_INSTALL" = "true" ]; then
+    INSTALL_DIR="/usr/local/bin"
+else
+    INSTALL_DIR="$HOME/.local/bin"
 fi
 
-if [ "$1" = "--from-release" ]; then
+BIN_PATH="$INSTALL_DIR/wt"
+
+echo "Installing wt to $BIN_PATH..."
+
+do_install() {
+    local src="$1"
+    if [ "$SYSTEM_INSTALL" = "true" ] && [ "$(id -u)" -ne 0 ]; then
+        sudo mkdir -p "$INSTALL_DIR"
+        sudo cp "$src" "$BIN_PATH"
+        sudo chmod +x "$BIN_PATH"
+    else
+        mkdir -p "$INSTALL_DIR"
+        cp "$src" "$BIN_PATH"
+        chmod +x "$BIN_PATH"
+    fi
+}
+
+if [ "$FROM_RELEASE" = "true" ]; then
     echo "Downloading latest release from GitHub..."
 
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -38,40 +59,18 @@ if [ "$1" = "--from-release" ]; then
     DOWNLOAD_URL="https://github.com/pld/wt/releases/latest/download/${BINARY_NAME}"
 
     echo "Downloading from: $DOWNLOAD_URL"
-    curl -L "$DOWNLOAD_URL" -o "$BIN_PATH"
-    chmod +x "$BIN_PATH"
+    TMP_BIN=$(mktemp)
+    trap 'rm -f "$TMP_BIN"' EXIT
+    curl -L "$DOWNLOAD_URL" -o "$TMP_BIN"
+    chmod +x "$TMP_BIN"
+    do_install "$TMP_BIN"
+    rm -f "$TMP_BIN"
+    trap - EXIT
 else
     echo "Building from source..."
     cargo build --release
-    cp target/release/wt "$BIN_PATH"
+    do_install "target/release/wt"
 fi
-
-CURRENT_SHELL=$(basename "$SHELL")
-
-setup_shell_config() {
-    case "$CURRENT_SHELL" in
-        bash)
-            if [ -f "$HOME/.bash_profile" ] && [ "$(uname)" = "Darwin" ]; then
-                echo "$HOME/.bash_profile"
-            else
-                echo "$HOME/.bashrc"
-            fi
-            ;;
-        zsh)
-            echo "$HOME/.zshrc"
-            ;;
-        fish)
-            echo "$HOME/.config/fish/config.fish"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
-}
-
-SHELL_CONFIG=$(setup_shell_config)
-ALIAS_LINE="alias wt='$BIN_PATH'"
-FISH_ALIAS="alias wt '$BIN_PATH'"
 
 # Install CLI agent skills (only if user has the tool configured)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -106,35 +105,94 @@ install_gemini_skill() {
 install_claude_skill
 install_gemini_skill
 
-if [ -n "$SHELL_CONFIG" ]; then
-    mkdir -p "$(dirname "$SHELL_CONFIG")"
-    if [ "$CURRENT_SHELL" = "fish" ]; then
-        if ! grep -q "alias wt " "$SHELL_CONFIG" 2>/dev/null; then
-            echo "" >> "$SHELL_CONFIG"
-            echo "# wt - Git worktree orchestrator" >> "$SHELL_CONFIG"
-            echo "$FISH_ALIAS" >> "$SHELL_CONFIG"
-            echo "Added alias to $SHELL_CONFIG"
-        else
-            echo "Alias already exists in $SHELL_CONFIG"
-        fi
-    else
-        if ! grep -q "alias wt=" "$SHELL_CONFIG" 2>/dev/null; then
-            echo "" >> "$SHELL_CONFIG"
-            echo "# wt - Git worktree orchestrator" >> "$SHELL_CONFIG"
-            echo "$ALIAS_LINE" >> "$SHELL_CONFIG"
-            echo "Added alias to $SHELL_CONFIG"
-        else
-            echo "Alias already exists in $SHELL_CONFIG"
-        fi
-    fi
-    echo ""
-    echo "Installed to $BIN_PATH"
-else
-    echo ""
-    echo "Installed to $BIN_PATH"
-    echo ""
-    echo "Add this to your shell config:"
-    echo "  $ALIAS_LINE"
-fi
+# Migrate legacy ~/.wt/ layout to XDG locations.
+# Mirror the Rust helpers: only accept absolute XDG paths; fall back to defaults
+# for empty or relative values so migration never writes to cwd-relative locations.
+xdg_abs() {
+    local val="$1" default="$2"
+    case "$val" in
+        /*) echo "$val" ;;
+        *)  echo "$default" ;;
+    esac
+}
+XDG_CONFIG_HOME=$(xdg_abs "${XDG_CONFIG_HOME:-}" "$HOME/.config")
+XDG_STATE_HOME=$(xdg_abs "${XDG_STATE_HOME:-}" "$HOME/.local/state")
 
-exec $SHELL
+# Remove the exact comment+alias pair the old installer wrote from a shell rc file.
+# Only the two-line block is removed:
+#   # wt - Git worktree orchestrator
+#   alias wt=...  (or: alias wt '...' for fish)
+# Standalone alias lines the user may have written themselves are left alone.
+# awk is used instead of sed -i because BSD sed (macOS) requires -i ''
+# while GNU sed requires -i, with no portable common form.
+remove_wt_alias() {
+    local rc="$1"
+    local tmp
+    tmp=$(mktemp) || return 1
+    awk '
+        /^# wt - Git worktree orchestrator$/ {
+            if ((getline next_line) > 0 && next_line ~ /^alias wt[= '"'"']/) {
+                next
+            }
+            print
+            print next_line
+            next
+        }
+        { print }
+    ' "$rc" > "$tmp" && mv "$tmp" "$rc" || rm -f "$tmp"
+}
+
+migrate_legacy() {
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.config/fish/config.fish"; do
+        if [ ! -f "$rc" ]; then
+            continue
+        fi
+        if grep -q "^# wt - Git worktree orchestrator$" "$rc" 2>/dev/null; then
+            echo "Removing legacy wt alias from $rc..."
+            remove_wt_alias "$rc"
+        fi
+    done
+
+    # Remove the legacy binary now that the new one is in place.
+    if [ -f "$HOME/.wt/wt" ]; then
+        echo "Removing legacy binary ~/.wt/wt..."
+        rm "$HOME/.wt/wt"
+    fi
+
+    # Migrate global config if only the legacy location exists.
+    LEGACY_CONFIG="$HOME/.wt/config.toml"
+    NEW_CONFIG="$XDG_CONFIG_HOME/wt/config.toml"
+    if [ -f "$LEGACY_CONFIG" ] && [ ! -f "$NEW_CONFIG" ]; then
+        echo "Migrating $LEGACY_CONFIG -> $NEW_CONFIG..."
+        mkdir -p "$(dirname "$NEW_CONFIG")"
+        mv "$LEGACY_CONFIG" "$NEW_CONFIG"
+    fi
+
+    # Migrate session state if only the legacy location exists.
+    LEGACY_STATE="$HOME/.wt/sessions.json"
+    NEW_STATE="$XDG_STATE_HOME/wt/sessions.json"
+    if [ -f "$LEGACY_STATE" ] && [ ! -f "$NEW_STATE" ]; then
+        echo "Migrating $LEGACY_STATE -> $NEW_STATE..."
+        mkdir -p "$(dirname "$NEW_STATE")"
+        mv "$LEGACY_STATE" "$NEW_STATE"
+    fi
+
+    # Remove ~/.wt/ if it is now empty.
+    if [ -d "$HOME/.wt" ] && [ -z "$(ls -A "$HOME/.wt")" ]; then
+        echo "Removing empty ~/.wt/ directory..."
+        rmdir "$HOME/.wt"
+    fi
+}
+
+migrate_legacy
+
+echo ""
+echo "Installed wt to $BIN_PATH"
+
+# Warn if the install directory is not on PATH.
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+    echo ""
+    echo "Note: $INSTALL_DIR is not on your PATH."
+    echo "Add this line to your shell config to make 'wt' available:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+fi

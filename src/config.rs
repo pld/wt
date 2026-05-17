@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
@@ -78,16 +78,53 @@ impl SessionConfig {
     }
 }
 
+/// Returns `$XDG_CONFIG_HOME` if set, non-empty, and absolute; otherwise `~/.config`.
+/// Relative values are rejected per the XDG Base Directory spec.
+pub fn xdg_config_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+}
+
+/// Returns `$XDG_STATE_HOME` if set, non-empty, and absolute; otherwise `~/.local/state`.
+/// Relative values are rejected per the XDG Base Directory spec.
+pub fn xdg_state_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))
+}
+
+/// Resolves the global config path: XDG first, falling back to legacy `~/.wt/config.toml`
+/// with a one-time stderr notice if only the legacy location exists.
+fn resolve_global_config_path() -> Option<PathBuf> {
+    let xdg = xdg_config_home().map(|d| d.join("wt/config.toml"));
+    let legacy = dirs::home_dir().map(|h| h.join(".wt/config.toml"));
+    match (&xdg, &legacy) {
+        (Some(x), Some(l)) if !x.exists() && l.exists() => {
+            eprintln!(
+                "wt: notice: reading config from legacy ~/.wt/config.toml; rerun ./install.sh to migrate"
+            );
+            legacy
+        }
+        (Some(_), _) => xdg,
+        (None, _) => legacy,
+    }
+}
+
 impl Config {
-    /// Load config with precedence: .wt.toml > ~/.wt/config.toml > defaults
+    /// Load config with precedence: .wt.toml > $XDG_CONFIG_HOME/wt/config.toml > defaults
     pub fn load() -> Self {
-        let global = dirs::home_dir().map(|home| home.join(".wt").join("config.toml"));
+        let global = resolve_global_config_path();
         Self::load_layered(global.as_deref(), Some(Path::new(".wt.toml")))
     }
 
     /// Load config for a specific repo path
     pub fn load_for_repo(repo_path: &Path) -> Self {
-        let global = dirs::home_dir().map(|home| home.join(".wt").join("config.toml"));
+        let global = resolve_global_config_path();
         let local = repo_path.join(".wt.toml");
         Self::load_layered(global.as_deref(), Some(&local))
     }
@@ -118,13 +155,13 @@ impl Config {
         flag_override.unwrap_or(self.session.panes).clamp(2, 3)
     }
 
-    /// Ensure ~/.wt directory exists
-    pub fn ensure_wt_dir() -> Result<std::path::PathBuf> {
-        let home =
-            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-        let wt_dir = home.join(".wt");
-        std::fs::create_dir_all(&wt_dir)?;
-        Ok(wt_dir)
+    /// Ensure `$XDG_STATE_HOME/wt/` exists and return it.
+    pub fn ensure_state_dir() -> Result<PathBuf> {
+        let dir = xdg_state_home()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine XDG_STATE_HOME"))?
+            .join("wt");
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 }
 
@@ -548,6 +585,94 @@ panes = 3
         let config = Config::load_layered(Some(&global), Some(&local));
         assert_eq!(config.session.agent_cmd, "aider");
         assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_xdg_config_home_uses_env_var_when_set() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/test_xdg_config");
+        let result = xdg_config_home();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(
+            result,
+            Some(std::path::PathBuf::from("/tmp/test_xdg_config"))
+        );
+    }
+
+    #[test]
+    fn test_xdg_config_home_ignores_empty_env_var() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", "");
+        let result = xdg_config_home();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".config")));
+        }
+    }
+
+    #[test]
+    fn test_xdg_state_home_uses_env_var_when_set() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_STATE_HOME", "/tmp/test_xdg_state");
+        let result = xdg_state_home();
+        std::env::remove_var("XDG_STATE_HOME");
+        assert_eq!(
+            result,
+            Some(std::path::PathBuf::from("/tmp/test_xdg_state"))
+        );
+    }
+
+    #[test]
+    fn test_xdg_state_home_ignores_empty_env_var() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_STATE_HOME", "");
+        let result = xdg_state_home();
+        std::env::remove_var("XDG_STATE_HOME");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".local/state")));
+        }
+    }
+
+    #[test]
+    fn test_xdg_config_home_falls_back_to_home_config() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let result = xdg_config_home();
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".config")));
+        }
+    }
+
+    #[test]
+    fn test_xdg_state_home_falls_back_to_home_local_state() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("XDG_STATE_HOME");
+        let result = xdg_state_home();
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".local/state")));
+        }
+    }
+
+    #[test]
+    fn test_xdg_config_home_rejects_relative_path() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", "relative/path");
+        let result = xdg_config_home();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".config")));
+        }
+    }
+
+    #[test]
+    fn test_xdg_state_home_rejects_relative_path() {
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("XDG_STATE_HOME", "relative/path");
+        let result = xdg_state_home();
+        std::env::remove_var("XDG_STATE_HOME");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, Some(home.join(".local/state")));
+        }
     }
 
     #[test]

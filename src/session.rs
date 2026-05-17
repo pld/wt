@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::config::Config;
+use crate::config::{xdg_state_home, Config};
 use crate::tmux_manager::TmuxManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,14 +39,33 @@ impl SessionState {
         }
     }
 
-    fn state_file_path() -> Result<PathBuf> {
-        let wt_dir = Config::ensure_wt_dir()?;
-        Ok(wt_dir.join("sessions.json"))
+    /// Path for reading state: new XDG location, falling back to legacy `~/.wt/sessions.json`
+    /// with a one-time stderr notice if only the legacy path exists.
+    fn state_read_path() -> Result<PathBuf> {
+        let new_path = xdg_state_home()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine XDG_STATE_HOME"))?
+            .join("wt/sessions.json");
+        if !new_path.exists() {
+            if let Some(legacy) = dirs::home_dir().map(|h| h.join(".wt/sessions.json")) {
+                if legacy.exists() {
+                    eprintln!(
+                        "wt: notice: reading session state from legacy ~/.wt/sessions.json; rerun ./install.sh to migrate"
+                    );
+                    return Ok(legacy);
+                }
+            }
+        }
+        Ok(new_path)
     }
 
-    /// Load session state from ~/.wt/sessions.json
+    /// Path for writing state: always the new XDG location (creates the directory).
+    fn state_write_path() -> Result<PathBuf> {
+        Ok(Config::ensure_state_dir()?.join("sessions.json"))
+    }
+
+    /// Load session state from the XDG state location (or legacy fallback).
     pub fn load() -> Result<Option<Self>> {
-        let path = Self::state_file_path()?;
+        let path = Self::state_read_path()?;
         if !path.exists() {
             return Ok(None);
         }
@@ -58,9 +77,9 @@ impl SessionState {
         Ok(Some(state))
     }
 
-    /// Save session state to ~/.wt/sessions.json
+    /// Save session state to the XDG state location.
     pub fn save(&self) -> Result<()> {
-        let path = Self::state_file_path()?;
+        let path = Self::state_write_path()?;
         let contents =
             serde_json::to_string_pretty(self).context("Failed to serialize session state")?;
 
@@ -113,7 +132,7 @@ impl SessionState {
 
     /// Clear the session state file.
     pub fn clear() -> Result<()> {
-        let path = Self::state_file_path()?;
+        let path = Self::state_read_path()?;
         if path.exists() {
             std::fs::remove_file(&path).context("Failed to remove sessions.json")?;
         }
@@ -307,5 +326,33 @@ mod tests {
 
         retain_live_sessions(&mut entries, &HashSet::new());
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_legacy_state_fallback_is_read_when_xdg_path_absent() {
+        use std::io::Write;
+
+        let _e = crate::ENV_MUTEX.lock().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_dir = dir.path().join(".wt");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy_path = legacy_dir.join("sessions.json");
+
+        let state = SessionState::new("wt-legacy");
+        let json = serde_json::to_string(&state).unwrap();
+        std::fs::File::create(&legacy_path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+
+        std::env::set_var("HOME", dir.path());
+        std::env::remove_var("XDG_STATE_HOME");
+
+        let loaded = SessionState::load().unwrap();
+        std::env::remove_var("HOME");
+
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().session_name, "wt-legacy");
     }
 }
