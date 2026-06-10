@@ -4,6 +4,8 @@ use dialoguer::Select;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use crate::RepoLayout;
 use crate::{cmd_ls, RepoConfig};
 use wt::config::{Config, SessionMode};
 use wt::session::{retain_live_sessions, SessionState, WindowsSessionInfo};
@@ -65,7 +67,7 @@ struct SessionRmProbe {
 
 impl<'a> SessionCmdContext<'a> {
     fn new(repo: &'a RepoConfig, mode_override: Option<SessionMode>) -> Self {
-        let config = Config::load_for_repo(&repo.root);
+        let config = Config::load_for_repo(repo.session_cwd());
         let mode = mode_override.unwrap_or(config.session.mode);
 
         Self { repo, config, mode }
@@ -151,11 +153,15 @@ fn ensure_worktree_path(
     name: &str,
     base: &str,
 ) -> Result<PathBuf> {
-    check_not_in_worktree(&context.repo.root)?;
+    if !context.repo.is_bare() {
+        check_not_in_worktree(&std::env::current_dir()?)?;
+    }
 
-    let manager = WorktreeManager::new(context.repo.root.clone())?;
-    ensure_worktrees_in_gitignore(&context.repo.root, &context.repo.worktree_dir)?;
-    std::fs::create_dir_all(&context.repo.worktree_dir)?;
+    let manager = WorktreeManager::new(context.repo.git_cwd.clone())?;
+    if !context.repo.is_bare() {
+        ensure_worktrees_in_gitignore(&context.repo.git_cwd, &context.repo.worktree_dir)?;
+        std::fs::create_dir_all(&context.repo.worktree_dir)?;
+    }
 
     match manager.get_worktree_info(name)? {
         Some(info) => {
@@ -288,7 +294,7 @@ fn cmd_session_add_panes(
     if !tmux.session_exists()? {
         eprintln!("Creating tmux session: {}", SESSION_NAME);
         if watch {
-            create_status_window_session(&tmux, &context.repo.root)?;
+            create_status_window_session(&tmux, context.repo.status_cwd())?;
             tmux.create_window(name, &worktree_path)?;
         } else {
             tmux.create_session(name, &worktree_path)?;
@@ -296,7 +302,7 @@ fn cmd_session_add_panes(
         tmux.setup_worktree_layout(name, &worktree_path, panes, &session_config)?;
     } else {
         if watch {
-            ensure_status_window(&tmux, &context.repo.root)?;
+            ensure_status_window(&tmux, context.repo.status_cwd())?;
         }
 
         let windows = tmux.list_windows()?;
@@ -627,7 +633,7 @@ fn agent_window_status(tmux: &TmuxManager) -> AgentStatus {
 }
 
 fn probe_session_rm(context: &SessionCmdContext<'_>, name: &str) -> Result<SessionRmProbe> {
-    let manager = WorktreeManager::new(context.repo.root.clone())?;
+    let manager = WorktreeManager::new(context.repo.git_cwd.clone())?;
     let panes_tmux = TmuxManager::new(SESSION_NAME);
     let panes_has_worktree = if panes_tmux.session_exists()? {
         panes_tmux
@@ -793,7 +799,10 @@ mod tests {
 
         let context = SessionCmdContext {
             repo: &crate::RepoConfig {
-                root: std::path::PathBuf::from("/tmp/repo"),
+                layout: RepoLayout::Normal {
+                    root: std::path::PathBuf::from("/tmp/repo"),
+                },
+                git_cwd: std::path::PathBuf::from("/tmp/repo"),
                 worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
             },
             config,
@@ -815,7 +824,10 @@ mod tests {
         let original_agent_cmd = config.session.agent_cmd.clone();
         let context = SessionCmdContext {
             repo: &crate::RepoConfig {
-                root: std::path::PathBuf::from("/tmp/repo"),
+                layout: RepoLayout::Normal {
+                    root: std::path::PathBuf::from("/tmp/repo"),
+                },
+                git_cwd: std::path::PathBuf::from("/tmp/repo"),
                 worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
             },
             config,
@@ -835,7 +847,10 @@ mod tests {
 
         let context = SessionCmdContext {
             repo: &crate::RepoConfig {
-                root: std::path::PathBuf::from("/tmp/repo"),
+                layout: RepoLayout::Normal {
+                    root: std::path::PathBuf::from("/tmp/repo"),
+                },
+                git_cwd: std::path::PathBuf::from("/tmp/repo"),
                 worktree_dir: std::path::PathBuf::from("/tmp/repo/.worktrees"),
             },
             config,

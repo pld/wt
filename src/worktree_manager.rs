@@ -8,6 +8,54 @@ fn sanitize_for_path(name: &str) -> String {
     name.replace('/', "--")
 }
 
+struct ParsedWorktreeEntry {
+    path: PathBuf,
+    branch: Option<String>,
+}
+
+struct ParsingWorktree {
+    path: PathBuf,
+    branch: Option<String>,
+    bare: bool,
+}
+
+fn flush_worktree(current: &mut Option<ParsingWorktree>, entries: &mut Vec<ParsedWorktreeEntry>) {
+    if let Some(wt) = current.take() {
+        if !wt.bare {
+            entries.push(ParsedWorktreeEntry {
+                path: wt.path,
+                branch: wt.branch,
+            });
+        }
+    }
+}
+
+fn parse_worktree_porcelain(stdout: &str) -> Vec<ParsedWorktreeEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<ParsingWorktree> = None;
+
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            flush_worktree(&mut current, &mut entries);
+            current = Some(ParsingWorktree {
+                path: PathBuf::from(rest),
+                branch: None,
+                bare: false,
+            });
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            if let Some(wt) = current.as_mut() {
+                wt.branch = Some(rest.trim_start_matches("refs/heads/").to_string());
+            }
+        } else if line.trim() == "bare" {
+            if let Some(wt) = current.as_mut() {
+                wt.bare = true;
+            }
+        }
+    }
+    flush_worktree(&mut current, &mut entries);
+    entries
+}
+
 fn unsanitize_from_path(name: &str) -> String {
     name.replace("--", "/")
 }
@@ -103,16 +151,28 @@ pub fn ensure_worktrees_in_gitignore(repo_path: &Path, worktree_dir: &Path) -> R
 }
 
 pub fn check_not_in_worktree(path: &Path) -> Result<()> {
-    let mut current = path;
-    while let Some(parent) = current.parent() {
-        if current
-            .file_name()
-            .map(|n| n == ".worktrees")
-            .unwrap_or(false)
-        {
-            anyhow::bail!("Cannot create nested worktrees: already inside a .worktrees directory");
-        }
-        current = parent;
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(path)
+        .output();
+
+    let Ok(output) = output else {
+        return Ok(());
+    };
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // A linked worktree's --git-dir always ends with /worktrees/<name>.
+    // Using a suffix check avoids false positives from user paths that
+    // happen to contain "/worktrees/" as a non-git directory component.
+    let is_linked = git_dir
+        .rsplit_once("/worktrees/")
+        .map(|(_, name)| !name.is_empty() && !name.contains('/'))
+        .unwrap_or(false);
+    if is_linked {
+        anyhow::bail!("Cannot create nested worktrees: already inside a linked worktree");
     }
     Ok(())
 }
@@ -130,12 +190,13 @@ pub fn get_current_worktree_name(path: &Path) -> Result<String> {
 
     let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-    if let Some(pos) = git_dir.find("/.git/worktrees/") {
-        let worktree_name = &git_dir[pos + "/.git/worktrees/".len()..];
-        Ok(worktree_name.to_string())
-    } else {
-        Ok("main".to_string())
+    // A linked worktree's --git-dir is always <common-dir>/worktrees/<name>.
+    if let Some((_, name)) = git_dir.rsplit_once("/worktrees/") {
+        if !name.is_empty() && !name.contains('/') {
+            return Ok(name.to_string());
+        }
     }
+    Ok("main".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +212,12 @@ pub struct WorktreeManager {
 
 impl WorktreeManager {
     pub fn new(repo_path: PathBuf) -> Result<Self> {
-        if !repo_path.join(".git").exists() {
+        let output = Command::new("git")
+            .args(["rev-parse", "--git-common-dir"])
+            .current_dir(&repo_path)
+            .output()
+            .context("Failed to execute git rev-parse")?;
+        if !output.status.success() {
             anyhow::bail!("Not a git repository: {:?}", repo_path);
         }
         Ok(Self { repo_path })
@@ -340,33 +406,12 @@ impl WorktreeManager {
             );
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut worktrees = Vec::new();
-        let mut current_worktree: Option<(PathBuf, Option<String>)> = None;
-
-        for line in stdout.lines() {
-            if line.starts_with("worktree ") {
-                if let Some((path, branch)) = current_worktree.take() {
-                    worktrees.push(self.parse_worktree_entry(path, branch));
-                }
-                let path = PathBuf::from(line.strip_prefix("worktree ").unwrap());
-                current_worktree = Some((path, None));
-            } else if line.starts_with("branch ") {
-                if let Some((ref _path, ref mut branch)) = current_worktree {
-                    let branch_name = line
-                        .strip_prefix("branch ")
-                        .unwrap()
-                        .trim_start_matches("refs/heads/");
-                    *branch = Some(branch_name.to_string());
-                }
-            }
-        }
-
-        if let Some((path, branch)) = current_worktree {
-            worktrees.push(self.parse_worktree_entry(path, branch));
-        }
-
-        Ok(worktrees)
+        Ok(
+            parse_worktree_porcelain(&String::from_utf8_lossy(&output.stdout))
+                .into_iter()
+                .map(|entry| self.parse_worktree_entry(entry.path, entry.branch))
+                .collect(),
+        )
     }
 
     fn parse_worktree_entry(&self, path: PathBuf, branch: Option<String>) -> WorktreeInfo {
@@ -807,5 +852,41 @@ mod tests {
         // Remove should work with original name
         manager.remove_worktree("feature/auth").unwrap();
         assert!(!worktree_path.exists());
+    }
+
+    #[test]
+    fn test_parse_porcelain_drops_bare_entries() {
+        let porcelain = "\
+worktree /home/user/projects/todolist
+bare
+
+worktree /home/user/projects/todolist/feat
+HEAD abc123
+branch refs/heads/feat
+";
+        let entries = parse_worktree_porcelain(porcelain);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            PathBuf::from("/home/user/projects/todolist/feat")
+        );
+        assert_eq!(entries[0].branch.as_deref(), Some("feat"));
+    }
+
+    #[test]
+    fn test_parse_porcelain_normal_repo() {
+        let porcelain = "\
+worktree /home/user/projects/todolist
+HEAD abc123
+branch refs/heads/main
+
+worktree /home/user/projects/todolist/.worktrees/feat
+HEAD def456
+branch refs/heads/feat
+";
+        let entries = parse_worktree_porcelain(porcelain);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(entries[1].branch.as_deref(), Some("feat"));
     }
 }
