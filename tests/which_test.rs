@@ -51,6 +51,67 @@ fn test_which_returns_main_in_main_repo() {
 }
 
 #[test]
+fn test_which_returns_main_when_git_dir_contains_worktrees_segment() {
+    use wt::worktree_manager::get_current_worktree_name;
+
+    let temp_root = TempDir::new().unwrap();
+    let repo_path = temp_root
+        .path()
+        .join("nested")
+        .join("worktrees")
+        .join("repo-with-worktrees-segment");
+    fs::create_dir_all(&repo_path).unwrap();
+
+    let output = Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "failed to init repo: {:?}", output);
+
+    let output = Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to set user.email: {:?}",
+        output
+    );
+
+    let output = Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "failed to set user.name: {:?}",
+        output
+    );
+
+    fs::write(repo_path.join("README.md"), "# Test Repo\n").unwrap();
+
+    let output = Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "failed to add file: {:?}", output);
+
+    let output = Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "failed to commit: {:?}", output);
+
+    let result = get_current_worktree_name(&repo_path).unwrap();
+    assert_eq!(result, "main");
+}
+
+#[test]
 fn test_which_returns_worktree_name_in_worktree() {
     use wt::worktree_manager::get_current_worktree_name;
 
@@ -162,14 +223,22 @@ fn test_check_not_in_worktree_allows_normal_path() {
 }
 
 #[test]
-fn test_check_not_in_worktree_rejects_worktrees_dir() {
+fn test_check_not_in_worktree_rejects_linked_worktree() {
     use wt::worktree_manager::check_not_in_worktree;
 
-    let temp_dir = TempDir::new().unwrap();
-    let worktrees_path = temp_dir.path().join(".worktrees").join("some-worktree");
-    fs::create_dir_all(&worktrees_path).unwrap();
+    let repo = setup_git_repo();
+    let worktree_dir = TempDir::new().unwrap();
+    let worktree_path = worktree_dir.path().join("feature-xyz");
 
-    let result = check_not_in_worktree(&worktrees_path);
+    Command::new("git")
+        .args(["worktree", "add", "-b", "feature-xyz"])
+        .arg(&worktree_path)
+        .arg("main")
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+
+    let result = check_not_in_worktree(&worktree_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("nested"));
 }
